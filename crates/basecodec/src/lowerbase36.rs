@@ -136,13 +136,19 @@ fn read_base36_block(data: &[u8]) -> Result<u64, Base36Error> {
     Ok(val)
 }
 
-pub fn decode_lower_base36(data: &[u8]) -> Result<Vec<u8>, Base36Error> {
+/// Decodes into `dst`, reusing its allocation across calls instead of
+/// returning a fresh `Vec` (callers on a hot path, e.g. per-DNS-query label
+/// decoding, can keep one scratch buffer alive across many calls). `dst` is
+/// cleared first; on `Err` its contents are unspecified and must not be
+/// used.
+pub fn decode_lower_base36_into(dst: &mut Vec<u8>, data: &[u8]) -> Result<(), Base36Error> {
+    dst.clear();
     if data.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     let total_bytes = decoded_len_lower_base36(data.len())?;
-    let mut out = vec![0u8; total_bytes];
+    dst.resize(total_bytes, 0);
     let mut offset = 0usize;
     let mut src = data;
 
@@ -151,14 +157,24 @@ pub fn decode_lower_base36(data: &[u8]) -> Result<Vec<u8>, Base36Error> {
         let mut val = read_base36_block(&src[..char_count])?;
 
         for i in (0..block_size).rev() {
-            out[offset + i] = (val & 0xFF) as u8;
+            dst[offset + i] = (val & 0xFF) as u8;
             val >>= 8;
         }
         offset += block_size;
         src = &src[char_count..];
     }
 
+    Ok(())
+}
+
+pub fn decode_lower_base36(data: &[u8]) -> Result<Vec<u8>, Base36Error> {
+    let mut out = Vec::new();
+    decode_lower_base36_into(&mut out, data)?;
     Ok(out)
+}
+
+pub fn decode_lower_base36_string_into(dst: &mut Vec<u8>, data: &str) -> Result<(), Base36Error> {
+    decode_lower_base36_into(dst, data.as_bytes())
 }
 
 pub fn decode_lower_base36_string(data: &str) -> Result<Vec<u8>, Base36Error> {
@@ -195,5 +211,31 @@ mod tests {
         let data = b"hello world";
         let encoded = encode_lower_base36(data).to_uppercase();
         assert_eq!(decode_lower_base36_string(&encoded).unwrap(), data);
+    }
+
+    #[test]
+    fn decode_into_matches_decode_and_reuses_buffer_across_calls() {
+        let mut scratch = Vec::new();
+        for len in 0..30usize {
+            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 5) as u8).collect();
+            let encoded = encode_lower_base36(&data);
+
+            // Pre-fill scratch with unrelated bytes and an over-sized
+            // capacity from a previous call, to check decode_into clears and
+            // reuses it correctly rather than assuming it starts empty.
+            scratch.extend_from_slice(&[0xAAu8; 64]);
+            decode_lower_base36_into(&mut scratch, encoded.as_bytes()).unwrap();
+
+            assert_eq!(scratch, data, "len={len}");
+            assert_eq!(scratch, decode_lower_base36(encoded.as_bytes()).unwrap(), "len={len}");
+        }
+    }
+
+    #[test]
+    fn decode_into_propagates_errors_like_decode() {
+        let mut scratch = vec![1, 2, 3];
+        let bad = b"!!!not-base36!!!";
+        assert!(decode_lower_base36_into(&mut scratch, bad).is_err());
+        assert!(decode_lower_base36(bad).is_err());
     }
 }

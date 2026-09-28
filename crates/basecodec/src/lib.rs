@@ -34,3 +34,15 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, Base36Error> {
 pub fn decode_string(data: &str) -> Result<Vec<u8>, Base36Error> {
     decode_lower_base36_string(data)
 }
+
+/// Same as [`decode`], but writes into a caller-owned buffer instead of
+/// allocating a fresh one - see [`decode_lower_base36_into`].
+pub fn decode_into(dst: &mut Vec<u8>, data: &[u8]) -> Result<(), Base36Error> {
+    decode_lower_base36_into(dst, data)
+}
+
+/// Same as [`decode_string`], but writes into a caller-owned buffer instead
+/// of allocating a fresh one - see [`decode_lower_base36_string_into`].
+pub fn decode_string_into(dst: &mut Vec<u8>, data: &str) -> Result<(), Base36Error> {
+    decode_lower_base36_string_into(dst, data)
+}
