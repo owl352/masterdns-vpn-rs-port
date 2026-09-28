@@ -99,6 +99,11 @@ real fix needs wider sequence numbers, i.e. a negotiated protocol extension.
 ## SOCKS5 test target
 
 The server refuses loopback and private IP literals as SOCKS5 targets, so the
-SOCKS scenarios connect to a hostname that resolves to 127.0.0.1:
-`<LocalHostName>.local` on macOS, `compat-target.test` in the Linux
-container (added with `--add-host`), or `-socks-host` / `$COMPAT_SOCKS_HOST`.
+SOCKS scenarios connect to a hostname instead: `-socks-host` /
+`$COMPAT_SOCKS_HOST`, else `<LocalHostName>.local` on macOS, else
+`compat-target.test` (added with `--add-host` in the Linux container). The
+name must resolve to this machine: loopback is preferred, a local interface
+address also works (the echo target then listens on that address for the
+duration of the scenario, reachable from the local network). If no such name
+is found, the SOCKS scenarios fail rather than being silently skipped; pass
+`-allow-skip` to the runner to accept that.

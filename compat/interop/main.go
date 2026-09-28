@@ -76,6 +76,7 @@ var (
 	scale      = flag.Float64("scale", 1, "multiply transfer sizes")
 	timeoutSec = flag.Int("timeout", 180, "per-scenario timeout in seconds")
 	logLevel   = flag.String("log-level", "INFO", "LOG_LEVEL for the server and clients")
+	allowSkip  = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
 )
 
 func allScenarios() []Scenario {
@@ -134,17 +135,26 @@ func main() {
 		d, _ := os.MkdirTemp("", "compat-interop-")
 		*workDir = d
 	}
-	host := resolveSocksHost()
+	host, hostIP := resolveSocksHost()
 
 	var results []Result
 	failed := 0
 	for _, sc := range selected {
 		if sc.Mode == "SOCKS5" && host == "" {
-			results = append(results, Result{Scenario: sc.Name, Error: "skipped: no -socks-host that resolves locally"})
-			fmt.Printf("%-20s SKIP (no SOCKS host)\n", sc.Name)
+			results = append(results, Result{Scenario: sc.Name, Error: "skipped: no -socks-host that resolves to this machine"})
+			if *allowSkip {
+				fmt.Printf("%-20s SKIP (no SOCKS host)\n", sc.Name)
+			} else {
+				fmt.Printf("%-20s FAIL (skipped: no SOCKS host; pass -socks-host or -allow-skip)\n", sc.Name)
+				failed++
+			}
 			continue
 		}
-		r := runScenario(sc, host)
+		bindIP := "127.0.0.1"
+		if sc.Mode == "SOCKS5" {
+			bindIP = hostIP
+		}
+		r := runScenario(sc, host, bindIP)
 		results = append(results, r)
 		status := "PASS"
 		if !r.Pass {
@@ -170,7 +180,12 @@ func main() {
 	}
 }
 
-func resolveSocksHost() string {
+// resolveSocksHost picks a hostname (not an IP literal: the server refuses
+// those for loopback/private targets) that resolves to this machine, and the
+// address it resolves to, which the SOCKS echo target then listens on.
+// Loopback is preferred; a local interface address works too, e.g. when
+// "<LocalHostName>.local" resolves to the LAN address.
+func resolveSocksHost() (string, string) {
 	candidates := []string{*socksHost, os.Getenv("COMPAT_SOCKS_HOST")}
 	if out, err := exec.Command("scutil", "--get", "LocalHostName").Output(); err == nil {
 		candidates = append(candidates, strings.TrimSpace(string(out))+".local")
@@ -185,17 +200,35 @@ func resolveSocksHost() string {
 			continue
 		}
 		for _, a := range addrs {
-			if ip := net.ParseIP(a); ip != nil && ip.IsLoopback() {
-				return h
+			if ip := net.ParseIP(a); ip != nil && ip.To4() != nil && ip.IsLoopback() {
+				return h, ip.String()
+			}
+		}
+		for _, a := range addrs {
+			if ip := net.ParseIP(a); ip != nil && ip.To4() != nil && isLocalAddress(ip) {
+				return h, ip.String()
 			}
 		}
 	}
-	return ""
+	return "", ""
+}
+
+func isLocalAddress(ip net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- scenario execution ----
 
-func runScenario(sc Scenario, host string) (res Result) {
+func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	res.Scenario = sc.Name
 	dir := filepath.Join(*workDir, sc.Name)
 	_ = os.RemoveAll(dir)
@@ -206,7 +239,7 @@ func runScenario(sc Scenario, host string) (res Result) {
 
 	targets := newTargets()
 	defer targets.close()
-	targetPort, err := targets.listen(sc.Work)
+	targetPort, err := targets.listen(sc.Work, bindIP)
 	if err != nil {
 		res.Error = err.Error()
 		return
@@ -473,8 +506,8 @@ type targets struct {
 
 func newTargets() *targets { return &targets{sinkDigests: make(chan digest, 16)} }
 
-func (t *targets) listen(work string) (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+func (t *targets) listen(work, bindIP string) (int, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort(bindIP, "0"))
 	if err != nil {
 		return 0, err
 	}
