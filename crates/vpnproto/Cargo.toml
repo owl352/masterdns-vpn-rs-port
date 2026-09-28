@@ -1,0 +1,13 @@
+[package]
+name = "vpnproto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+enums = { workspace = true }
+security = { workspace = true }
+compression = { workspace = true }
+thiserror = { workspace = true }

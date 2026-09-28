@@ -1,0 +1,13 @@
+[package]
+name = "logger"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arq = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+enable-ansi-support = "0.2"

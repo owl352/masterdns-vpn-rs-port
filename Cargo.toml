@@ -1,0 +1,88 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/enums",
+    "crates/basecodec",
+    "crates/compression",
+    "crates/security",
+    "crates/config",
+    "crates/dnsparser",
+    "crates/vpnproto",
+    "crates/arq",
+    "crates/netutil",
+    "crates/logger",
+    "crates/socksproto",
+    "crates/mlq",
+    "crates/fragmentstore",
+    "crates/inflight",
+    "crates/domainmatcher",
+    "crates/dnscache",
+    "crates/udpserver",
+    "crates/wirecompat",
+    "cmd-client",
+    "cmd-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["MasterkinG32 <https://github.com/masterking32>"]
+license = "MIT"
+repository = "https://github.com/masterking32/MasterDnsVPN"
+
+[workspace.dependencies]
+enums = { path = "crates/enums" }
+basecodec = { path = "crates/basecodec" }
+compression = { path = "crates/compression" }
+security = { path = "crates/security" }
+config = { path = "crates/config" }
+dnsparser = { path = "crates/dnsparser" }
+vpnproto = { path = "crates/vpnproto" }
+arq = { path = "crates/arq" }
+netutil = { path = "crates/netutil" }
+logger = { path = "crates/logger" }
+socksproto = { path = "crates/socksproto" }
+mlq = { path = "crates/mlq" }
+fragmentstore = { path = "crates/fragmentstore" }
+inflight = { path = "crates/inflight" }
+domainmatcher = { path = "crates/domainmatcher" }
+dnscache = { path = "crates/dnscache" }
+udpserver = { path = "crates/udpserver" }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+thiserror = "2"
+rand = "0.8"
+socket2 = { version = "0.5", features = ["all"] }
+libc = "0.2"
+indexmap = "2"
+if-addrs = "0.13"
+dashmap = "6"
+rustc-hash = "2"
+
+zstd = "0.13"
+lz4_flex = "0.11"
+flate2 = "1"
+
+chacha20 = "0.9"
+aes = "0.8"
+aes-gcm = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+base64 = "0.22"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Release optimizations + debug symbols, for use with a sampling profiler
+# (samply/Instruments) against a realistic-speed binary. Not part of the
+# normal build; only built on demand when profiling.
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

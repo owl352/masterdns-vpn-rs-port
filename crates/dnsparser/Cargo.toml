@@ -1,0 +1,15 @@
+[package]
+name = "dnsparser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+enums = { workspace = true }
+basecodec = { workspace = true }
+compression = { workspace = true }
+vpnproto = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }

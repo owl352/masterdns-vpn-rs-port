@@ -1,0 +1,13 @@
+[package]
+name = "compression"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+zstd = { workspace = true }
+lz4_flex = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }

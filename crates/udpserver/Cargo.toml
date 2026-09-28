@@ -1,0 +1,35 @@
+[package]
+name = "udpserver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustc-hash = { workspace = true }
+enums = { workspace = true }
+basecodec = { workspace = true }
+compression = { workspace = true }
+security = { workspace = true }
+config = { workspace = true }
+dnsparser = { workspace = true }
+vpnproto = { workspace = true }
+arq = { workspace = true }
+netutil = { workspace = true }
+logger = { workspace = true }
+socksproto = { workspace = true }
+mlq = { workspace = true }
+fragmentstore = { workspace = true }
+inflight = { workspace = true }
+domainmatcher = { workspace = true }
+dnscache = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+socket2 = { workspace = true }
+dashmap = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }

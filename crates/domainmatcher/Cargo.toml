@@ -1,0 +1,11 @@
+[package]
+name = "domainmatcher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dnsparser = { workspace = true }
+enums = { workspace = true }

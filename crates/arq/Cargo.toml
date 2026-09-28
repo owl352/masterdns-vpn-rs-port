@@ -1,0 +1,14 @@
+[package]
+name = "arq"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustc-hash = { workspace = true }
+enums = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = "0.1"

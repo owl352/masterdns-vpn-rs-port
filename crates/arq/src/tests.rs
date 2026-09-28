@@ -1,0 +1,301 @@
+//! End-to-end tests exercising the real background loops (io/write/rx/retransmit)
+//! against an in-memory duplex "local connection" and a mock packet enqueuer.
+
+use crate::{ArqLogger, CloseOptions, Config, PacketEnqueuer};
+use std::sync::Mutex;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Default)]
+struct MockEnqueuer {
+    pushed: Mutex<Vec<(u8, u16, Vec<u8>)>>,
+    notify: tokio::sync::Notify,
+}
+
+impl PacketEnqueuer for MockEnqueuer {
+    fn push_tx_packet(
+        &self,
+        _priority: i32,
+        packet_type: u8,
+        sequence_num: u16,
+        _fragment_id: u8,
+        _total_fragments: u8,
+        _compression_type: u8,
+        _ttl: Duration,
+        payload: &[u8],
+    ) -> bool {
+        self.pushed.lock().unwrap().push((packet_type, sequence_num, payload.to_vec()));
+        self.notify.notify_one();
+        true
+    }
+}
+
+struct SilentLogger;
+impl ArqLogger for SilentLogger {}
+
+async fn wait_for_push(mock: &MockEnqueuer, packet_type: u8) -> (u16, Vec<u8>) {
+    for _ in 0..200 {
+        {
+            let pushed = mock.pushed.lock().unwrap();
+            if let Some(&(_, sn, ref payload)) = pushed.iter().find(|(pt, _, _)| *pt == packet_type) {
+                return (sn, payload.clone());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for packet type {packet_type}");
+}
+
+#[tokio::test]
+async fn local_app_write_becomes_stream_data_push() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(1, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    let (mut app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    app_side.write_all(b"hello from app").await.unwrap();
+
+    let (sn, payload) = wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA).await;
+    assert_eq!(sn, 0);
+    assert_eq!(payload, b"hello from app");
+    assert!(arq.has_pending_sequence(0));
+}
+
+#[tokio::test]
+async fn receive_data_is_delivered_to_local_app_in_order() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(2, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    let (mut app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    // Deliver sequence 1 first (out of order), then 0 — write_loop should
+    // still emit "helloworld" (in order) once 0 arrives.
+    assert!(arq.receive_data(1, b"world"));
+    assert!(arq.receive_data(0, b"hello"));
+
+    let mut buf = [0u8; 32];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut collected = Vec::new();
+    while collected.len() < 10 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(200), app_side.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => collected.extend_from_slice(&buf[..n]),
+            _ => continue,
+        }
+    }
+
+    assert_eq!(collected, b"helloworld");
+
+    // Both sequence numbers should have produced STREAM_DATA_ACK pushes.
+    wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA_ACK).await;
+}
+
+#[tokio::test]
+async fn receive_ack_clears_pending_sequence() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(3, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    let (mut app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    app_side.write_all(b"data").await.unwrap();
+    wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA).await;
+    assert!(arq.has_pending_sequence(0));
+
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0));
+    assert!(!arq.has_pending_sequence(0));
+    // A second ACK for the same (already-removed) sequence is a no-op.
+    assert!(!arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0));
+}
+
+#[tokio::test]
+async fn close_force_finalizes_immediately() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(4, 1, enqueuer, 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    assert!(!arq.is_closed());
+    arq.close("test forced close", CloseOptions { force: true, ..Default::default() });
+    assert!(arq.is_closed());
+    assert_eq!(arq.state(), crate::StreamState::Closing);
+
+    tokio::time::timeout(Duration::from_secs(1), arq.done()).await.expect("done() should resolve after close");
+}
+
+#[tokio::test]
+async fn rst_close_sends_rst_packet_and_closes_after_ack() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(5, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    arq.close("test rst", CloseOptions { send_rst: true, ..Default::default() });
+
+    let (sn, _) = wait_for_push(&enqueuer, enums::PACKET_STREAM_RST).await;
+    assert!(!arq.is_closed(), "should be waiting for RST_ACK, not yet fully closed");
+
+    assert!(arq.handle_ack_packet(enums::PACKET_STREAM_RST_ACK, sn, 0));
+    assert!(arq.is_closed());
+}
+
+fn pushed_data_sizes(mock: &MockEnqueuer) -> Vec<usize> {
+    mock.pushed.lock().unwrap().iter().filter(|(pt, _, _)| *pt == enums::PACKET_STREAM_DATA).map(|(_, _, p)| p.len()).collect()
+}
+
+#[tokio::test]
+async fn reads_pause_while_enough_data_is_queued_and_resume_with_full_packets() {
+    const MTU: usize = 100;
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(6, 1, enqueuer.clone(), MTU, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    let (mut app_side, arq_side) = tokio::io::duplex(8192);
+    arq.set_local_conn(arq_side);
+
+    // Small writes spaced out: each is read on its own while there is room.
+    for _ in 0..crate::loops::READ_AHEAD_DATA_PACKETS {
+        app_side.write_all(&[7u8; 20]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Nothing is being pulled, so these must stay in the connection buffer.
+    for _ in 0..30 {
+        app_side.write_all(&[9u8; 20]).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(pushed_data_sizes(&enqueuer), vec![20; crate::loops::READ_AHEAD_DATA_PACKETS]);
+
+    // A pull frees one slot; the buffered small writes come out as one full packet.
+    arq.note_tx_packet_dequeued(enums::PACKET_STREAM_DATA, 0, 0);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let sizes = pushed_data_sizes(&enqueuer);
+    assert_eq!(sizes.len(), crate::loops::READ_AHEAD_DATA_PACKETS + 1);
+    assert_eq!(sizes[crate::loops::READ_AHEAD_DATA_PACKETS], MTU);
+
+    // An ACK for a still-queued packet also frees a slot.
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(pushed_data_sizes(&enqueuer).len(), crate::loops::READ_AHEAD_DATA_PACKETS + 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn upstream_eof_with_unacked_data_does_not_deadlock() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(7, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    let (mut app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    app_side.write_all(b"never acked").await.unwrap();
+    wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA).await;
+    // EOF while sequence 0 is still unacked -> deferred (draining) close, which
+    // the retransmit loop then polls. Its first sleep (idle interval) can be
+    // over a second, so allow several ticks.
+    drop(app_side);
+    std::thread::sleep(Duration::from_millis(3000));
+
+    // Probe from a plain OS thread: if the retransmit loop deadlocked it may
+    // have taken every runtime worker (and the timer) down with it, so no
+    // tokio-based timeout could fire.
+    let probe = arq.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe.state());
+    });
+    if rx.recv_timeout(Duration::from_secs(2)).is_err() {
+        // Unwinding would hang in runtime shutdown on the stuck worker.
+        eprintln!("ARQ state lock is stuck: retransmit loop deadlocked while draining");
+        std::process::abort();
+    }
+    assert_eq!(arq.state(), crate::StreamState::Draining);
+}
+
+#[tokio::test]
+async fn receive_data_queues_ack_before_returning() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(8, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+    let (_app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    // No await in between: nothing else gets a chance to run first.
+    assert!(arq.receive_data(0, b"payload"));
+    let pushed = enqueuer.pushed.lock().unwrap();
+    assert!(pushed.iter().any(|(t, sn, _)| *t == enums::PACKET_STREAM_DATA_ACK && *sn == 0), "ACK for seq 0 not queued synchronously: {:?}", pushed.iter().map(|(t, sn, _)| (*t, *sn)).collect::<Vec<_>>());
+}
+
+/// CLOSE_READ arrives while a retransmitted duplicate is still being handled:
+/// the writer must still half-close the local connection once that duplicate
+/// is done, not wait for the terminal drain timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_read_half_closes_after_inflight_duplicate() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(9, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+    let (mut app_side, arq_side) = tokio::io::duplex(4096);
+    arq.set_local_conn(arq_side);
+
+    assert!(arq.receive_data(0, b"x"));
+    let mut buf = [0u8; 8];
+    let n = tokio::time::timeout(Duration::from_secs(2), app_side.read(&mut buf)).await.unwrap().unwrap();
+    assert_eq!(&buf[..n], b"x");
+
+    // A duplicate of seq 0 is in flight when CLOSE_READ is processed.
+    arq.inner.lock().unwrap().pending_inbound += 1;
+    arq.mark_close_read_received();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The duplicate finishes on the "already delivered" early-return path.
+    arq.process_received_data(0, b"x");
+
+    let eof = tokio::time::timeout(Duration::from_secs(1), app_side.read(&mut buf)).await;
+    assert!(matches!(eof, Ok(Ok(0))), "local connection was not half-closed: {eof:?}");
+}
+
+/// A retransmission of data delivered long ago (more than 32768 sequence
+/// numbers back, which 16-bit sequence arithmetic reads as "ahead") must be
+/// re-ACKed, not dropped: its first ACK was lost and the peer keeps resending
+/// it, so dropping it stalled the stream until the drain timeout.
+#[tokio::test]
+async fn ancient_duplicate_that_looks_ahead_is_reacked() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(10, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.inner.lock().unwrap().rcv_nxt = 60000;
+
+    // 15000 is ~45000 behind 60000, i.e. 20536 "ahead" modulo 65536.
+    arq.process_received_data(15000, b"old");
+    let acked = |sn: u16| enqueuer.pushed.lock().unwrap().iter().any(|(t, s, _)| *t == enums::PACKET_STREAM_DATA_ACK && *s == sn);
+    assert!(acked(15000), "old duplicate was not re-ACKed");
+    assert!(arq.inner.lock().unwrap().rcv_buf.is_empty(), "old duplicate must not be buffered");
+
+    // Genuinely ahead (inside the receive window) is still buffered and ACKed.
+    arq.process_received_data(60010, b"ahead");
+    assert!(acked(60010));
+    assert!(arq.inner.lock().unwrap().rcv_buf.contains_key(&60010));
+}
+
+/// Past a gap, a peer can legitimately be more than one window ahead
+/// (ACKs are per packet). Such data beyond our receive window must be dropped
+/// without an ACK so the peer resends it later, never ACKed and discarded.
+#[tokio::test]
+async fn far_ahead_data_within_peer_reach_is_not_acked() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let cfg = Config { window_size: 4096, ..Config::default() };
+    let arq = crate::Arq::new(11, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), cfg);
+    {
+        // Seq 1000 is missing; we already saw data up to one receive window
+        // past it, so the peer may be up to MAX_WINDOW_SIZE beyond that.
+        let mut s = arq.inner.lock().unwrap();
+        s.rcv_nxt = 1000;
+        s.rcv_highest = 1000u16.wrapping_add(arq.receive_window_size as u16);
+    }
+    let ahead = (arq.receive_window_size + crate::MAX_WINDOW_SIZE / 2) as u16;
+    let sn = 1000u16.wrapping_add(ahead);
+
+    arq.process_received_data(sn, b"future");
+    let acked = enqueuer.pushed.lock().unwrap().iter().any(|(t, s, _)| *t == enums::PACKET_STREAM_DATA_ACK && *s == sn);
+    assert!(!acked, "data {ahead} ahead was ACKed without being stored");
+    assert!(arq.inner.lock().unwrap().rcv_buf.is_empty());
+}

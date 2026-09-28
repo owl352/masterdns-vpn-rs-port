@@ -1,0 +1,19 @@
+[package]
+name = "masterdnsvpn-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "masterdnsvpn-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+config = { workspace = true }
+security = { workspace = true }
+logger = { workspace = true }
+udpserver = { workspace = true }

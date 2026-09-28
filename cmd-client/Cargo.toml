@@ -1,0 +1,14 @@
+[package]
+name = "masterdnsvpn-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "masterdnsvpn-client"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }

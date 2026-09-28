@@ -1,0 +1,20 @@
+[package]
+name = "wirecompat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Wire-compatibility fixtures shared with the Go MasterDnsVPN implementation (see compat/)."
+
+[dependencies]
+enums = { workspace = true }
+basecodec = { workspace = true }
+compression = { workspace = true }
+security = { workspace = true }
+dnsparser = { workspace = true }
+vpnproto = { workspace = true }
+domainmatcher = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
