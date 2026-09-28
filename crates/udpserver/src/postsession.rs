@@ -129,20 +129,20 @@ impl Server {
             self.handle_packed_control_blocks_request(vpn_packet, record, now);
             return true;
         }
-        self.dispatch_post_session_packet(vpn_packet, record)
+        self.dispatch_post_session_packet(vpn_packet, record, now)
     }
 
-    fn dispatch_post_session_packet(&self, p: &vpnproto::Packet, record: &SessionRuntimeView) -> bool {
+    fn dispatch_post_session_packet(&self, p: &vpnproto::Packet, record: &SessionRuntimeView, now: Instant) -> bool {
         match p.packet_type {
             enums::PACKET_PING => true,
             enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND => self.handle_stream_data_request(p),
             enums::PACKET_STREAM_DATA_NACK => self.handle_stream_data_nack_request(p),
-            enums::PACKET_DNS_QUERY_REQ => self.handle_dns_query_request(p, record),
+            enums::PACKET_DNS_QUERY_REQ => self.handle_dns_query_request(p, record, now),
             enums::PACKET_STREAM_SYN => self.handle_stream_syn_request(p, record),
             enums::PACKET_SOCKS5_SYN => self.handle_socks5_syn_request(p, record),
             enums::PACKET_STREAM_CLOSE_READ => self.handle_stream_close_read_request(p),
             enums::PACKET_STREAM_CLOSE_WRITE => self.handle_stream_close_write_request(p),
-            enums::PACKET_STREAM_RST => self.handle_stream_rst_request(p),
+            enums::PACKET_STREAM_RST => self.handle_stream_rst_request(p, now),
             _ => false,
         }
     }
@@ -341,7 +341,7 @@ impl Server {
                 handled = true;
                 return true;
             }
-            if self.dispatch_post_session_packet(&block, record) {
+            if self.dispatch_post_session_packet(&block, record, now) {
                 handled = true;
             }
             true
@@ -399,12 +399,11 @@ impl Server {
         true
     }
 
-    fn handle_stream_rst_request(&self, p: &vpnproto::Packet) -> bool {
+    fn handle_stream_rst_request(&self, p: &vpnproto::Packet, now: Instant) -> bool {
         if !p.has_stream_id || p.stream_id == 0 {
             return false;
         }
         let Some(record) = self.sessions.get(p.session_id) else { return true };
-        let now = Instant::now();
 
         if let Some(stream) = record.get_stream(p.stream_id) {
             record.enqueue_orphan_reset(enums::PACKET_STREAM_RST_ACK, p.stream_id, p.sequence_num);
@@ -704,13 +703,12 @@ impl Server {
 
     // ---- DNS_QUERY_REQ (tunneled DNS resolution-as-a-service) ----
 
-    fn handle_dns_query_request(&self, p: &vpnproto::Packet, record: &SessionRuntimeView) -> bool {
+    fn handle_dns_query_request(&self, p: &vpnproto::Packet, record: &SessionRuntimeView, now: Instant) -> bool {
         let mut total_fragments = p.total_fragments;
         if total_fragments == 0 {
             total_fragments = 1;
         }
 
-        let now = Instant::now();
         let outcome = self.dns_fragments.collect(
             DnsFragmentKey { session_id: p.session_id, sequence_num: p.sequence_num },
             &p.payload,
