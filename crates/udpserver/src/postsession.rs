@@ -16,7 +16,10 @@ fn is_stream_creation_packet_type(t: u8) -> bool {
     matches!(t, x if x == enums::PACKET_STREAM_SYN || x == enums::PACKET_SOCKS5_SYN)
 }
 
-fn vpn_packet_from_tx(p: &ServerStreamTxPacket, stream_id: u16) -> vpnproto::Packet {
+/// Takes `p` by value so the caller's (already-dequeued, otherwise-discarded)
+/// packet's payload can be moved into the response instead of cloned - this
+/// runs on essentially every query that has a queued packet to send.
+fn vpn_packet_from_tx(p: ServerStreamTxPacket, stream_id: u16) -> vpnproto::Packet {
     vpnproto::Packet {
         packet_type: p.packet_type,
         stream_id,
@@ -25,10 +28,10 @@ fn vpn_packet_from_tx(p: &ServerStreamTxPacket, stream_id: u16) -> vpnproto::Pac
         total_fragments: p.total_fragments,
         compression_type: p.compression_type,
         has_compression_type: p.compression_type != compression::TYPE_OFF,
-        payload: p.payload.clone(),
         has_sequence_num: p.sequence_num != 0,
         has_fragment_info: p.fragment_id != 0 || p.total_fragments != 0,
         has_stream_id: true,
+        payload: p.payload,
         ..Default::default()
     }
 }
@@ -844,7 +847,7 @@ impl Server {
                     record.cache_packed_control_block_duplicate(self.cfg.packet_block_control_duplication, Some(pkt.clone()));
                     return Some(pkt);
                 }
-                return Some(vpn_packet_from_tx(&item, selected_stream_id));
+                return Some(vpn_packet_from_tx(item, selected_stream_id));
             }
         }
 
@@ -864,7 +867,7 @@ impl Server {
     ) -> vpnproto::Packet {
         let limit = record.max_packed_blocks;
         if limit <= 1 {
-            return vpn_packet_from_tx(&first, initial_stream_id);
+            return vpn_packet_from_tx(first, initial_stream_id);
         }
 
         let mut payload = Vec::with_capacity((limit as usize) * vpnproto::PACKED_CONTROL_BLOCK_SIZE);
@@ -945,7 +948,7 @@ impl Server {
         }
 
         if blocks <= 1 {
-            return vpn_packet_from_tx(&first, initial_stream_id);
+            return vpn_packet_from_tx(first, initial_stream_id);
         }
 
         vpnproto::Packet { packet_type: enums::PACKET_PACKED_CONTROL_BLOCKS, payload, stream_id: 0, has_stream_id: true, ..Default::default() }
