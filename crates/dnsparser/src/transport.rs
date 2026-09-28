@@ -197,21 +197,25 @@ pub fn build_vpn_response_packet(
     packet: &vpnproto::Packet,
     base_encode: bool,
 ) -> Result<Vec<u8>, DnsParserError> {
-    let raw_frame = vpnproto::build_raw_auto(
-        vpnproto::BuildOptions {
-            session_id: packet.session_id,
-            packet_type: packet.packet_type,
-            session_cookie: packet.session_cookie,
-            stream_id: packet.stream_id,
-            sequence_num: packet.sequence_num,
-            fragment_id: packet.fragment_id,
-            total_fragments: packet.total_fragments,
-            compression_type: packet.compression_type,
-            payload: packet.payload.clone(),
-        },
-        compression::DEFAULT_MIN_SIZE,
-    )
+    // Unlike the vpnproto::build_raw_auto + append_*_txt + response path this
+    // replaces, this borrows `packet.payload` instead of cloning it, and (for
+    // the common non-base64 case) writes header, TXT length-prefix bytes and
+    // payload straight into the one final response buffer instead of
+    // materializing a raw-frame Vec and a TXT-rdata Vec first.
+    let (payload, compression_type) =
+        vpnproto::prepare_payload_cow(packet.packet_type, &packet.payload, packet.compression_type, compression::DEFAULT_MIN_SIZE);
+    let header = vpnproto::build_raw_header(&vpnproto::BuildHeaderOptions {
+        session_id: packet.session_id,
+        packet_type: packet.packet_type,
+        session_cookie: packet.session_cookie,
+        stream_id: packet.stream_id,
+        sequence_num: packet.sequence_num,
+        fragment_id: packet.fragment_id,
+        total_fragments: packet.total_fragments,
+        compression_type,
+    })
     .map_err(|_| DnsParserError::TxtAnswerMalformed)?;
+    let header_bytes = header.as_slice();
 
     // The whole frame always goes into ONE TXT record, split into as many
     // 255-byte character-strings as needed. Clients (Go and Rust alike)
@@ -220,11 +224,26 @@ pub fn build_vpn_response_packet(
     // multi-record layout's per-record overhead (12-byte RR header + 1-2 byte
     // chunk prefix per 255 bytes) and its sensitivity to resolvers reordering
     // RRsets.
-    let rdata = if base_encode { append_base64_txt_strings(&raw_frame) } else { append_length_prefixed_txt(&raw_frame) };
-    if rdata.len() > u16::MAX as usize {
+    if base_encode {
+        // Raw-base64 needs the frame as one contiguous slice to encode, so
+        // this path still materializes it (rare relative to the
+        // length-prefixed layout below).
+        let mut raw_frame = Vec::with_capacity(header_bytes.len() + payload.len());
+        raw_frame.extend_from_slice(header_bytes);
+        raw_frame.extend_from_slice(&payload);
+        let rdata = append_base64_txt_strings(&raw_frame);
+        if rdata.len() > u16::MAX as usize {
+            return Err(DnsParserError::TxtAnswerTooLarge);
+        }
+        return build_single_txt_response_packet(question_packet, answer_name, &rdata);
+    }
+
+    let frame_len = header_bytes.len() + payload.len();
+    let rdata_len = length_prefixed_txt_len(frame_len);
+    if rdata_len > u16::MAX as usize {
         return Err(DnsParserError::TxtAnswerTooLarge);
     }
-    build_single_txt_response_packet(question_packet, answer_name, &rdata)
+    build_single_txt_response_packet_framed(question_packet, answer_name, rdata_len, header_bytes, &payload)
 }
 
 /// Raw-base64 encodes `data` as a single string, then splits it into TXT
@@ -235,11 +254,19 @@ fn append_base64_txt_strings(data: &[u8]) -> Vec<u8> {
     append_length_prefixed_txt(&encoded)
 }
 
-fn build_single_txt_response_packet(
+/// Writes the DNS header, question, answer name and TXT record header (up to
+/// but not including the rdata bytes) into a freshly allocated, exactly
+/// sized response buffer, plus the trailing OPT record if the query had one.
+/// Returns the buffer and the byte range reserved for the `rdata_len` bytes
+/// of rdata, which the caller fills in. Shared by
+/// [`build_single_txt_response_packet`] and
+/// [`build_single_txt_response_packet_framed`] so there is only one copy of
+/// this field layout to keep in sync with the wire format.
+fn txt_response_skeleton(
     question_packet: &[u8],
     answer_name: &str,
-    answer_payload: &[u8],
-) -> Result<Vec<u8>, DnsParserError> {
+    rdata_len: usize,
+) -> Result<(Vec<u8>, std::ops::Range<usize>), DnsParserError> {
     if question_packet.len() < DNS_HEADER_SIZE {
         return Err(DnsParserError::PacketTooShort);
     }
@@ -250,7 +277,7 @@ fn build_single_txt_response_packet(
 
     let name_bytes = response_answer_name_bytes(question_packet, question_count > 0, answer_name)?;
 
-    let mut response = vec![0u8; DNS_HEADER_SIZE + question_bytes.len() + name_bytes.len() + 10 + answer_payload.len() + opt_len];
+    let mut response = vec![0u8; DNS_HEADER_SIZE + question_bytes.len() + name_bytes.len() + 10 + rdata_len + opt_len];
     response[0..2].copy_from_slice(&header.id.to_be_bytes());
     response[2..4].copy_from_slice(&build_response_flags(header.flags, enums::DNSR_CODE_NO_ERROR).to_be_bytes());
     response[4..6].copy_from_slice(&question_count.to_be_bytes());
@@ -266,15 +293,81 @@ fn build_single_txt_response_packet(
     response[offset..offset + 2].copy_from_slice(&enums::DNS_RECORD_TYPE_TXT.to_be_bytes());
     response[offset + 2..offset + 4].copy_from_slice(&enums::DNSQ_CLASS_IN.to_be_bytes());
     response[offset + 4..offset + 8].copy_from_slice(&0u32.to_be_bytes());
-    response[offset + 8..offset + 10].copy_from_slice(&(answer_payload.len() as u16).to_be_bytes());
+    response[offset + 8..offset + 10].copy_from_slice(&(rdata_len as u16).to_be_bytes());
     offset += 10;
-    response[offset..offset + answer_payload.len()].copy_from_slice(answer_payload);
-    offset += answer_payload.len();
+    let rdata_range = offset..offset + rdata_len;
+    offset += rdata_len;
 
     if opt_len > 0 {
         response[offset..].copy_from_slice(&question_packet[opt_start..opt_start + opt_len]);
     }
 
+    Ok((response, rdata_range))
+}
+
+fn build_single_txt_response_packet(
+    question_packet: &[u8],
+    answer_name: &str,
+    answer_payload: &[u8],
+) -> Result<Vec<u8>, DnsParserError> {
+    let (mut response, rdata_range) = txt_response_skeleton(question_packet, answer_name, answer_payload.len())?;
+    response[rdata_range].copy_from_slice(answer_payload);
+    Ok(response)
+}
+
+/// Same rdata layout as [`append_length_prefixed_txt`] applied to
+/// `header ++ payload`, but computed without concatenating them first (see
+/// [`write_length_prefixed_frame`]).
+fn length_prefixed_txt_len(frame_len: usize) -> usize {
+    if frame_len <= 255 {
+        1 + frame_len
+    } else {
+        let parts = 1 + (frame_len - 1) / 255;
+        frame_len + parts
+    }
+}
+
+/// Writes `header ++ payload` (a raw vpnproto frame, split across two
+/// slices) into `out` as TXT character-strings: a 1-byte length prefix per
+/// <=255-byte chunk, identical to what
+/// `append_length_prefixed_txt(&[header, payload].concat())` would produce,
+/// without allocating the concatenation. `out.len()` must equal
+/// `length_prefixed_txt_len(header.len() + payload.len())`.
+fn write_length_prefixed_frame(out: &mut [u8], header: &[u8], payload: &[u8]) {
+    let frame_len = header.len() + payload.len();
+    debug_assert_eq!(out.len(), length_prefixed_txt_len(frame_len));
+
+    let mut out_pos = 0usize;
+    let first_chunk_total = frame_len.min(255);
+    out[out_pos] = first_chunk_total as u8;
+    out_pos += 1;
+    out[out_pos..out_pos + header.len()].copy_from_slice(header);
+    out_pos += header.len();
+    let first_payload_take = first_chunk_total - header.len();
+    out[out_pos..out_pos + first_payload_take].copy_from_slice(&payload[..first_payload_take]);
+    out_pos += first_payload_take;
+
+    let mut rest = &payload[first_payload_take..];
+    while !rest.is_empty() {
+        let take = rest.len().min(255);
+        out[out_pos] = take as u8;
+        out_pos += 1;
+        out[out_pos..out_pos + take].copy_from_slice(&rest[..take]);
+        out_pos += take;
+        rest = &rest[take..];
+    }
+    debug_assert_eq!(out_pos, out.len());
+}
+
+fn build_single_txt_response_packet_framed(
+    question_packet: &[u8],
+    answer_name: &str,
+    rdata_len: usize,
+    header: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>, DnsParserError> {
+    let (mut response, rdata_range) = txt_response_skeleton(question_packet, answer_name, rdata_len)?;
+    write_length_prefixed_frame(&mut response[rdata_range], header, payload);
     Ok(response)
 }
 
@@ -898,6 +991,44 @@ mod tests {
         .unwrap();
         let legacy = build_txt_response_packet(&question, &qname, &build_txt_answer_chunks(&raw_frame, false).unwrap()).unwrap();
         assert!(response.len() < legacy.len(), "new={} legacy={}", response.len(), legacy.len());
+    }
+
+    #[test]
+    fn vpn_response_matches_reference_construction_around_chunk_boundaries() {
+        // build_vpn_response_packet's fast path writes the vpnproto header
+        // and payload straight into the TXT rdata region, split into
+        // <=255-byte length-prefixed chunks, without ever concatenating them
+        // into one raw-frame buffer first. Cross-check its output
+        // byte-for-byte against the reference construction (build the raw
+        // frame the old way, then length-prefix it as one slice) at payload
+        // lengths that land the 255-byte chunk boundary right at, just
+        // before and just after the header/payload split - the case the
+        // fast path's first-chunk special handling has to get right.
+        let (question, qname) = long_tunnel_question();
+        for payload_len in [0usize, 1, 200, 243, 244, 245, 246, 254, 255, 256, 500, 509, 510, 511, 765, 766, 1000, 4096] {
+            let packet = data_packet(payload_len);
+            let fast = build_vpn_response_packet(&question, &qname, &packet, false).unwrap();
+
+            let raw_frame = vpnproto::build_raw_auto(
+                vpnproto::BuildOptions {
+                    session_id: packet.session_id,
+                    packet_type: packet.packet_type,
+                    session_cookie: packet.session_cookie,
+                    stream_id: packet.stream_id,
+                    sequence_num: packet.sequence_num,
+                    fragment_id: packet.fragment_id,
+                    total_fragments: packet.total_fragments,
+                    compression_type: packet.compression_type,
+                    payload: packet.payload.clone(),
+                },
+                compression::DEFAULT_MIN_SIZE,
+            )
+            .unwrap();
+            let rdata = append_length_prefixed_txt(&raw_frame);
+            let reference = build_single_txt_response_packet(&question, &qname, &rdata).unwrap();
+
+            assert_eq!(fast, reference, "payload_len={payload_len}");
+        }
     }
 
     #[test]
