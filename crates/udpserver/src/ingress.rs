@@ -10,6 +10,16 @@ fn is_pre_session_request_type(packet_type: u8) -> bool {
     matches!(packet_type, enums::PACKET_SESSION_INIT | enums::PACKET_MTU_UP_REQ | enums::PACKET_MTU_DOWN_REQ)
 }
 
+thread_local! {
+    /// Reused across calls to `vpnproto::parse_inflated_from_labels_into` on
+    /// whichever OS thread is currently polling a serve task: avoids
+    /// allocating fresh decode/decrypt buffers for every incoming query on
+    /// this (very hot, always-synchronous) path. Not tied to a particular
+    /// session or task - it's pure scratch space, cleared and refilled by
+    /// each call before use.
+    static LABEL_PARSE_SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl Server {
     pub fn handle_packet(&self, packet: &[u8]) -> Option<Vec<u8>> {
         self.handle_packet_at(packet, std::time::Instant::now())
@@ -52,7 +62,9 @@ impl Server {
     }
 
     fn handle_tunnel_candidate(&self, packet: &[u8], parsed: &LitePacket, decision: &domainmatcher::Decision, now: std::time::Instant) -> Option<Vec<u8>> {
-        let vpn_packet = vpnproto::parse_inflated_from_labels(&decision.labels, Some(&self.codec)).ok()?;
+        let vpn_packet = LABEL_PARSE_SCRATCH
+            .with(|scratch| vpnproto::parse_inflated_from_labels_into(&decision.labels, Some(&self.codec), &mut scratch.borrow_mut()))
+            .ok()?;
 
         if vpn_packet.packet_type == enums::PACKET_SESSION_CLOSE {
             self.handle_session_close_notice(&vpn_packet, now);

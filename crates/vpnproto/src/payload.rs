@@ -1,7 +1,7 @@
 //! Port of `internal/vpnproto/payload.go`.
 
 use crate::flags::has_compression_extension;
-use crate::parser::{parse, parse_from_labels};
+use crate::parser::{parse, parse_from_labels, parse_from_labels_into};
 use crate::{build_raw, BuildOptions, Packet, VpnProtoError};
 use security::Codec;
 use std::borrow::Cow;
@@ -69,6 +69,13 @@ pub fn parse_inflated_from_labels(labels: &str, codec: Option<&Codec>) -> Result
     inflate_payload(packet)
 }
 
+/// Same result as [`parse_inflated_from_labels`], but via
+/// [`parse_from_labels_into`] - see that function's docs.
+pub fn parse_inflated_from_labels_into(labels: &str, codec: Option<&Codec>, scratch: &mut Vec<u8>) -> Result<Packet, VpnProtoError> {
+    let packet = parse_from_labels_into(labels, codec, scratch)?;
+    inflate_payload(packet)
+}
+
 pub fn parse_inflated(data: &[u8]) -> Result<Packet, VpnProtoError> {
     let packet = parse(data)?;
     inflate_payload(packet)
@@ -119,5 +126,36 @@ mod cow_tests {
         let (cow, ctype) = prepare_payload_cow(enums::PACKET_STREAM_DATA, payload, compression::TYPE_ZSTD, 0);
         assert_eq!(ctype, compression::TYPE_OFF);
         assert!(matches!(cow, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn parse_inflated_from_labels_into_matches_allocating_version() {
+        use crate::{build_encoded_auto, BuildOptions};
+        use security::Codec;
+
+        for method in [security::METHOD_NONE, security::METHOD_XOR, security::METHOD_CHACHA20, security::METHOD_AES128GCM] {
+            let codec = Codec::new(method, "shared secret").unwrap();
+            let mut scratch = Vec::new();
+            for payload_len in [0usize, 1, 50, 500, 5000] {
+                let opts = BuildOptions {
+                    session_id: 3,
+                    packet_type: enums::PACKET_STREAM_DATA,
+                    session_cookie: 9,
+                    stream_id: 4,
+                    sequence_num: 77,
+                    compression_type: compression::TYPE_ZSTD,
+                    payload: vec![0x5Au8; payload_len],
+                    ..Default::default()
+                };
+                let labels = build_encoded_auto(opts, Some(&codec), compression::DEFAULT_MIN_SIZE).unwrap();
+
+                let expected = parse_inflated_from_labels(&labels, Some(&codec)).unwrap();
+
+                scratch.extend_from_slice(&[0xCCu8; 20]);
+                let via_scratch = parse_inflated_from_labels_into(&labels, Some(&codec), &mut scratch).unwrap();
+
+                assert_eq!(via_scratch, expected, "method={method} payload_len={payload_len}");
+            }
+        }
     }
 }

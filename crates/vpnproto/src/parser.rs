@@ -55,6 +55,25 @@ pub fn parse_from_labels(labels: &str, codec: Option<&Codec>) -> Result<Packet, 
     parse(&raw)
 }
 
+/// Same result as [`parse_from_labels`], but decodes and decrypts into
+/// `scratch` (see [`Codec::decode_string_and_decrypt_into`]) instead of
+/// allocating fresh buffers for the decode and decrypt steps. Callers that
+/// process many packets per thread (e.g. one per incoming query) can keep
+/// one `scratch` buffer alive across calls; `Packet::payload` is still its
+/// own allocation (sliced out of `scratch` by [`parse`]).
+pub fn parse_from_labels_into(labels: &str, codec: Option<&Codec>, scratch: &mut Vec<u8>) -> Result<Packet, VpnProtoError> {
+    let codec = codec.ok_or(VpnProtoError::CodecUnavailable)?;
+    if labels.is_empty() {
+        return Err(VpnProtoError::InvalidEncodedData);
+    }
+
+    codec
+        .decode_string_and_decrypt_into(labels, scratch)
+        .map_err(|_| VpnProtoError::InvalidEncodedData)?;
+
+    parse(scratch)
+}
+
 pub fn parse(data: &[u8]) -> Result<Packet, VpnProtoError> {
     parse_at_offset(data, 0)
 }
