@@ -74,11 +74,10 @@ pub(crate) const REACK_QUEUE_CAP: usize = 4 * 65536;
 /// by `loops::READ_AHEAD_DATA_PACKETS`).
 pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
 
-/// Whether `store_received_data` below skips queuing the *immediate*
-/// STREAM_DATA_ACK it would otherwise send synchronously at
-/// `default_packet_priority(PACKET_STREAM_DATA_ACK)` (CRITICAL) — it does,
-/// whenever `has_queued_download_data` reports this stream already has
-/// NORMAL-priority download data waiting.
+/// How long `store_received_data` waits before sending a "fast ACK" for a
+/// freshly-stored packet *instead of* the immediate synchronous one, when
+/// `has_queued_download_data` reports this stream already has NORMAL-
+/// priority download data waiting.
 ///
 /// Root cause this addresses (distinct from, but analogous to,
 /// `REACK_PRIORITY` above): a DNS reply carries at most one item from a
@@ -91,36 +90,58 @@ pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
 /// download phases) found 37% of all server replies were exactly this: a
 /// single lone STREAM_DATA_ACK.
 ///
-/// An earlier version of this fix queued the immediate ACK anyway, just at
-/// `PACKET_PRIORITY_LOW` (`REACK_PRIORITY`'s tier) instead of CRITICAL, plus
-/// a dequeue-time check that force-released a LOW-priority ACK once it had
-/// waited past a short bound, so it could never starve behind a sustained
-/// backlog. That force-release could not tell a freshly-demoted immediate
-/// ACK apart from an ordinary already-scheduled `REACK_PRIORITY` duplicate
-/// sitting at the front of the same LOW level — and since a re-ACK is by
-/// construction already `REACK_DELAY` (150ms) old by the time it's pushed,
-/// it was "aged past the bound" the instant it became visible. The
-/// dequeue-time check then force-released it *ahead of any waiting NORMAL
-/// data too*, on every single call, effectively inverting the priority order
-/// it was supposed to only bend as a last resort: measured on
-/// `socks-echo-multi` (8 duplex SOCKS streams, `-client-dup 2
-/// -client-setup-dup 2 -client-batch 1`), this starved download data almost
-/// completely and made most runs time out entirely instead of completing in
-/// ~1-3s.
+/// Two earlier designs were tried and rejected before this one:
 ///
-/// This version sidesteps that failure mode by not queuing a second,
-/// separately-timed copy at all: `store_received_data` (below) already
-/// unconditionally schedules a delayed re-ACK for `sn` via
-/// `schedule_reack_locked` (next `REACK_DELAY`/150ms), regardless of whether
-/// the immediate copy is sent. Skipping the immediate copy when download
-/// data is backlogged just lets that already-scheduled, already-proven-safe
-/// re-ACK be the *only* copy instead of a redundant second one — reusing
-/// exactly the same timing guarantee `REACK_DELAY`'s own doc comment
-/// justifies against the client's measured RTO, instead of inventing a new,
-/// separately-tuned bound that has to coexist with it in the same queue
-/// level. When there is no such backlog, the immediate ACK is still sent at
-/// its normal CRITICAL priority exactly as before — this only changes
-/// behavior when the immediate copy would otherwise have displaced data.
+/// 1. Queue the immediate ACK anyway, just at `PACKET_PRIORITY_LOW`
+///    (`REACK_PRIORITY`'s tier) instead of CRITICAL, plus a dequeue-time
+///    check that force-released a LOW-priority ACK once it had waited past a
+///    short bound. That check could not tell a freshly-demoted immediate ACK
+///    apart from an ordinary already-scheduled `REACK_PRIORITY` duplicate
+///    sitting at the front of the same LOW level - and since a re-ACK is by
+///    construction already `REACK_DELAY` (150ms) old by the time it's
+///    pushed, it was "aged past the bound" the instant it became visible.
+///    The check then force-released it *ahead of any waiting NORMAL data
+///    too*, on every single call, inverting the priority order it was
+///    supposed to only bend as a last resort: measured on `socks-echo-multi`
+///    (8 duplex SOCKS streams, `-client-dup 2 -client-setup-dup 2
+///    -client-batch 1`), this starved download data almost completely and
+///    made most runs time out entirely instead of completing in ~1-3s.
+///
+/// 2. Skip the immediate ACK entirely and rely solely on the delayed re-ACK
+///    `schedule_reack_locked` already unconditionally schedules for the same
+///    `sn` (next `REACK_DELAY`/150ms) as a safety net regardless of whether
+///    the immediate copy is sent. Simple and safe (no priority-order
+///    interaction at all), but measurably *slower* on the same
+///    `socks-echo-multi` benchmark (interleaved runs: ~11.4 MiB/s median vs
+///    ~15.2 MiB/s for the unfixed baseline) - on this benchmark's
+///    near-zero-latency local network, the Go client's own adaptively-
+///    estimated upload RTO is apparently well under REACK_DELAY's 150ms, so
+///    relying on it alone was already routinely causing the client to
+///    retransmit before ever seeing an ACK.
+///
+/// This version keeps design 2's *skip the immediate copy* half (still no
+/// priority-order interaction: nothing at LOW is touched) but replaces
+/// "wait for REACK_DELAY" with a dedicated, short, fixed delay - scheduled
+/// in its own FIFO (`ArqState::pending_fast_acks`, drained by
+/// `emit_due_fast_acks`) entirely separate from `pending_reacks`, and
+/// emitted at the ACK's normal CRITICAL priority (not LOW), so once it fires
+/// it behaves exactly like the original synchronous immediate ACK always
+/// did - no new interaction with `REACK_PRIORITY`'s LOW-priority items is
+/// possible. `loops::retransmit_loop`'s wake-up floor for pending timers is
+/// 20ms (see its doc comment, tuned against exactly this kind of sustained-
+/// traffic busy-loop risk), so this typically lands ~25-45ms after the data
+/// was stored: comfortably batched into that same query's or the next
+/// query's reply, and - per the client RTO figures in the task notes
+/// (median ~0.3s, "as low as" ~0.25s even under load) - still generous
+/// margin under the client's *documented* worst-case RTO floor, even though
+/// this benchmark's effective RTO on an idle local Docker network runs
+/// lower than that floor. The delayed re-ACK safety net from
+/// `schedule_reack_locked` is still scheduled unconditionally on top of
+/// this, unchanged, in case the fast ACK's own UDP datagram is lost. When
+/// there is no download backlog, the immediate ACK is still sent
+/// synchronously at CRITICAL exactly as before - this only changes behavior
+/// when the immediate copy would otherwise have displaced data.
+pub(crate) const FAST_ACK_DELAY: Duration = Duration::from_millis(25);
 
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
@@ -175,6 +196,12 @@ impl Arq {
     fn store_received_data(&self, sn: u16, data: &[u8]) {
         let now = Instant::now();
         let exists;
+        // Read once and reused below for both the fast-ACK scheduling
+        // decision (inside the lock) and the immediate-send decision
+        // (outside it): the enqueuer's own lock is independent of `self.
+        // inner`, so this is safe to call either place, and a single read
+        // avoids acting on two different snapshots of the same signal.
+        let backlogged = self.enqueuer.has_queued_download_data();
 
         {
             let mut s = self.inner.lock().unwrap();
@@ -248,25 +275,26 @@ impl Arq {
                 s.rcv_buf.insert(sn, data.to_vec());
             }
 
-            // We are about to ACK `sn` immediately below, and it is actually
-            // stored (either just now or already, on a duplicate): schedule
-            // one extra ACK for it a bit later, in case the immediate one is
-            // the one that gets lost at the peer's socket. Never do this for
-            // data we return early without storing/ACKing above (out-of-
-            // window, too far ahead, or the receive buffer is full) — ACKing
-            // data we didn't keep would make the peer think it was delivered.
+            // We are about to ACK `sn` (immediately or via the fast-ACK path
+            // below) and it is actually stored (either just now or already,
+            // on a duplicate): schedule one extra ACK for it a bit later, in
+            // case that one is the one that gets lost at the peer's socket.
+            // Never do this for data we return early without storing/ACKing
+            // above (out-of-window, too far ahead, or the receive buffer is
+            // full) — ACKing data we didn't keep would make the peer think
+            // it was delivered.
             self.schedule_reack_locked(&mut s, sn, now);
+
+            // See `FAST_ACK_DELAY`'s doc comment: when this stream's own
+            // download data would otherwise be displaced by the immediate
+            // ACK in the next reply, schedule a short-delay CRITICAL-
+            // priority "fast ACK" instead of sending it synchronously now.
+            if backlogged {
+                self.schedule_fast_ack_locked(&mut s, sn, now);
+            }
         }
 
-        // See the doc comment above `store_received_data` (search
-        // "Root cause this addresses"): only skip the immediate copy when
-        // this stream's own download data would otherwise be displaced by
-        // it in the next reply. `schedule_reack_locked` above has already
-        // unconditionally scheduled a delayed re-ACK for `sn` regardless, so
-        // skipping the immediate copy here never leaves `sn` permanently
-        // unacknowledged - it just lets that already-scheduled copy be the
-        // only one instead of a redundant second one.
-        if !self.enqueuer.has_queued_download_data() {
+        if !backlogged {
             self.enqueuer.push_tx_packet(
                 enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
                 enums::PACKET_STREAM_DATA_ACK,
@@ -340,6 +368,58 @@ impl Arq {
     /// wake-up interval while a re-ACK is in flight.
     pub(crate) fn next_reack_due(&self) -> Option<Instant> {
         self.inner.lock().unwrap().pending_reacks.front().map(|&(_, at)| at)
+    }
+
+    /// Appends `(sn, now + FAST_ACK_DELAY)` to the pending fast-ACK FIFO,
+    /// dropping the oldest entry first if it is already at capacity (same
+    /// cap as `pending_reacks` - see `REACK_QUEUE_CAP`'s doc comment; it
+    /// applies equally here since a fast ACK is scheduled at most as often as
+    /// a re-ACK is). Must be called with `s` already locked; wakes
+    /// `retransmit_loop` the same way `schedule_reack_locked` does.
+    fn schedule_fast_ack_locked(&self, s: &mut ArqState, sn: u16, now: Instant) {
+        if s.pending_fast_acks.len() >= REACK_QUEUE_CAP {
+            s.pending_fast_acks.pop_front();
+        }
+        s.pending_fast_acks.push_back((sn, now + FAST_ACK_DELAY));
+        self.reack_scheduled.notify_one();
+    }
+
+    /// Emits every scheduled fast ACK whose delay has elapsed, at the ACK's
+    /// normal CRITICAL priority (see `FAST_ACK_DELAY`'s doc comment for why
+    /// this is deliberately not `REACK_PRIORITY`/LOW like `emit_due_reacks`).
+    /// Called from `retransmit_loop` alongside `emit_due_reacks`.
+    pub(crate) fn emit_due_fast_acks(&self, now: Instant) {
+        let due: Vec<u16> = {
+            let mut s = self.inner.lock().unwrap();
+            let mut due = Vec::new();
+            while let Some(&(sn, at)) = s.pending_fast_acks.front() {
+                if at > now {
+                    break;
+                }
+                s.pending_fast_acks.pop_front();
+                due.push(sn);
+            }
+            due
+        };
+
+        for sn in due {
+            self.enqueuer.push_tx_packet(
+                enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+                enums::PACKET_STREAM_DATA_ACK,
+                sn,
+                0,
+                0,
+                0,
+                std::time::Duration::ZERO,
+                &[],
+            );
+        }
+    }
+
+    /// The instant the next scheduled fast ACK (if any) becomes due; see
+    /// `next_reack_due`'s doc comment, same purpose for the fast-ACK FIFO.
+    pub(crate) fn next_fast_ack_due(&self) -> Option<Instant> {
+        self.inner.lock().unwrap().pending_fast_acks.front().map(|&(_, at)| at)
     }
 
     /// Resolves inbound `STREAM_DATA_ACK` and frees send-window backpressure slots.

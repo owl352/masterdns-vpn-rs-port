@@ -455,20 +455,23 @@ async fn pending_reacks_are_bounded_and_cleared_on_close() {
 
 /// `store_received_data` must queue the immediate ACK for a freshly-stored
 /// packet at its normal CRITICAL priority when the enqueuer reports no
-/// download data queued, and skip queuing it at all (relying solely on the
-/// delayed re-ACK, already unconditionally scheduled via
-/// `schedule_reack_locked`) when `has_queued_download_data` is true - so a
-/// lone ACK never preempts a stream's own waiting download data, but still
-/// rides its own reply promptly when there is nothing to preempt.
+/// download data queued, and skip queuing it synchronously - scheduling a
+/// short-delay `FAST_ACK_DELAY` fast ACK via `pending_fast_acks` instead -
+/// when `has_queued_download_data` is true, so a lone ACK never preempts a
+/// stream's own waiting download data, but still rides its own reply
+/// promptly when there is nothing to preempt.
 ///
-/// (A prior version of this fix instead demoted the immediate ACK to LOW
-/// priority and force-released it after a short bound; that collided with
+/// (Two prior designs were tried and rejected: demoting the immediate ACK to
+/// LOW priority with a dequeue-time force-release (collided with
 /// `REACK_PRIORITY`'s own LOW-priority duplicates and caused a severe
-/// duplex-throughput regression - see the doc comment on
-/// `store_received_data` above for the full account. This test locks in the
-/// corrected "skip entirely" behavior instead.)
+/// duplex-throughput regression), and skipping it entirely in favor of
+/// `REACK_DELAY`'s existing 150ms safety net alone (safe, but measurably
+/// slower on a near-zero-latency network where the client's own adaptive
+/// upload RTO runs under 150ms). See the doc comment on `FAST_ACK_DELAY`
+/// above for the full account. This test locks in the corrected "skip the
+/// synchronous copy, schedule a short-delay CRITICAL one instead" behavior.)
 #[tokio::test]
-async fn immediate_ack_skipped_when_download_backlogged_kept_when_not() {
+async fn immediate_ack_becomes_fast_ack_when_download_backlogged() {
     let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
     let cfg = Config { window_size: 300, ..Config::default() };
     // Synchronous, like the FIFO test above: no need for the background loops.
@@ -479,17 +482,42 @@ async fn immediate_ack_skipped_when_download_backlogged_kept_when_not() {
     assert_eq!(
         enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0),
         Some(enums::PACKET_PRIORITY_CRITICAL),
-        "with no download backlog the immediate ACK must still be sent, at CRITICAL"
+        "with no download backlog the immediate ACK must still be sent synchronously, at CRITICAL"
     );
+    assert!(!arq.inner.lock().unwrap().pending_fast_acks.iter().any(|&(sn, _)| sn == 0), "no fast ACK should be scheduled when the immediate copy was already sent");
 
     enqueuer.set_has_backlog(true);
     arq.process_received_data(1, b"backlogged");
     assert_eq!(
         enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 1),
         None,
-        "with download backlog the immediate ACK must be skipped entirely, not merely demoted"
+        "with download backlog the immediate ACK must not be sent synchronously"
     );
+    assert!(arq.inner.lock().unwrap().pending_fast_acks.iter().any(|&(sn, _)| sn == 1), "sn=1 must have a fast ACK scheduled");
     // The delayed re-ACK safety net is still scheduled regardless, so sn=1
-    // is never left permanently unacknowledged.
-    assert!(arq.inner.lock().unwrap().pending_reacks.iter().any(|&(sn, _)| sn == 1), "sn=1 must still have a delayed re-ACK scheduled");
+    // is covered twice over, never left permanently unacknowledged.
+    assert!(arq.inner.lock().unwrap().pending_reacks.iter().any(|&(sn, _)| sn == 1), "sn=1 must still also have a delayed re-ACK scheduled");
+}
+
+/// The scheduled fast ACK from the test above must actually fire, at the
+/// ACK's normal CRITICAL priority, once `FAST_ACK_DELAY` elapses - exercised
+/// through the real background loops this time (`arq.start()`) so
+/// `retransmit_loop`'s wake-up timing is exactly what a live stream sees.
+#[tokio::test]
+async fn fast_ack_is_emitted_at_critical_priority_after_its_delay() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(16, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    enqueuer.set_has_backlog(true);
+    arq.process_received_data(0, b"backlogged");
+    // Not sent synchronously.
+    assert!(enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0).is_none());
+
+    // `retransmit_loop`'s wake-up floor is 20ms and `FAST_ACK_DELAY` is
+    // 25ms, so this should land well within a couple hundred ms even under
+    // test-harness scheduling noise.
+    let (sn, _) = wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA_ACK).await;
+    assert_eq!(sn, 0);
+    assert_eq!(enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0), Some(enums::PACKET_PRIORITY_CRITICAL), "the fast ACK must fire at CRITICAL, not LOW");
 }

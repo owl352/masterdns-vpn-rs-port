@@ -81,6 +81,18 @@ pub(crate) struct ArqState {
     /// always the next one due. Bounded in `Arq::schedule_reack_locked` so a
     /// chatty peer can't grow this without bound.
     pub pending_reacks: VecDeque<(u16, Instant)>,
+
+    /// FIFO of `(sn, due_instant)` for the short-delay "fast ACK" `Arq::
+    /// store_received_data` schedules (via `Arq::schedule_fast_ack_locked`)
+    /// instead of sending the immediate ACK synchronously, whenever the
+    /// enqueuer reports download data already backlogged - see
+    /// `data::FAST_ACK_DELAY`'s doc comment. Kept as its own FIFO, separate
+    /// from `pending_reacks`, because the two use different fixed delays
+    /// (`FAST_ACK_DELAY` vs `REACK_DELAY`): mixing entries with different
+    /// delays into one FIFO would break the "front is always due first"
+    /// invariant `Arq::emit_due_reacks`/`Arq::next_reack_due` rely on.
+    /// Bounded the same way in `Arq::schedule_fast_ack_locked`.
+    pub pending_fast_acks: VecDeque<(u16, Instant)>,
 }
 
 impl ArqState {
@@ -143,6 +155,7 @@ impl ArqState {
             last_data_nack_sent: FxHashMap::default(),
             pending_inbound: 0,
             pending_reacks: VecDeque::new(),
+            pending_fast_acks: VecDeque::new(),
         }
     }
 

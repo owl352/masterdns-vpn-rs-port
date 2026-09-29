@@ -595,6 +595,7 @@ pub(crate) fn clear_all_queues(state: &mut ArqState, clear_control: bool, window
     state.first_data_nack_seen.clear();
     state.last_data_nack_sent.clear();
     state.pending_reacks.clear();
+    state.pending_fast_acks.clear();
     window_not_full.notify_one();
 }
 
@@ -614,5 +615,6 @@ pub(crate) fn clear_outbound_state_locked(state: &mut ArqState, clear_control: b
     state.first_data_nack_seen.clear();
     state.last_data_nack_sent.clear();
     state.pending_reacks.clear();
+    state.pending_fast_acks.clear();
     window_not_full.notify_one();
 }
