@@ -16,6 +16,7 @@ impl Arq {
         let now = Instant::now();
         self.run_gap_recovery_watchdog(now);
         self.run_final_ack_watchdog(now);
+        self.emit_due_reacks(now);
 
         if self.handle_terminal_retransmit_state(now) {
             return;

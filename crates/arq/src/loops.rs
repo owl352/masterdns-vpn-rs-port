@@ -532,15 +532,33 @@ async fn retransmit_loop(arq: Arc<Arq>) {
                 rto_factor = arq.control_rto;
             }
             let base_interval = (rto_factor / 3).max(Duration::from_millis(50));
-            let has_pending = !s.snd_buf.is_empty() || (arq.enable_control_reliability && !s.control_snd_buf.is_empty());
+            let has_pending = !s.snd_buf.is_empty()
+                || (arq.enable_control_reliability && !s.control_snd_buf.is_empty())
+                || !s.pending_reacks.is_empty();
             (base_interval, has_pending)
         };
 
-        let interval = if has_pending { base_interval } else { (base_interval * 4).max(Duration::from_millis(100)) };
+        let mut interval = if has_pending { base_interval } else { (base_interval * 4).max(Duration::from_millis(100)) };
+
+        // A scheduled re-ACK has its own fixed delay (`data::REACK_DELAY`),
+        // independent of the RTO-derived interval above: cap the sleep to
+        // when it falls due so an upload-only stream (which never touches
+        // the `has_pending` branch through `snd_buf`/`control_snd_buf`)
+        // still emits it close to on time instead of up to a whole
+        // `base_interval` late.
+        if let Some(due) = arq.next_reack_due() {
+            let remaining = due.saturating_duration_since(std::time::Instant::now()).max(Duration::from_millis(1));
+            interval = interval.min(remaining);
+        }
 
         tokio::select! {
             _ = arq.cancel_token.cancelled() => return,
             _ = tokio::time::sleep(interval) => {}
+            // Wakes early when a fresh re-ACK is scheduled while this loop is
+            // mid-sleep on the long "nothing pending" interval, so the very
+            // first re-ACK of an otherwise idle stream isn't delayed by a
+            // sleep that was already committed to before it existed.
+            _ = arq.reack_scheduled.notified() => {}
         }
 
         arq.check_retransmits();

@@ -299,3 +299,80 @@ async fn far_ahead_data_within_peer_reach_is_not_acked() {
     assert!(!acked, "data {ahead} ahead was ACKed without being stored");
     assert!(arq.inner.lock().unwrap().rcv_buf.is_empty());
 }
+
+fn ack_pushes(mock: &MockEnqueuer, sn: u16) -> usize {
+    mock.pushed.lock().unwrap().iter().filter(|(t, s, _)| *t == enums::PACKET_STREAM_DATA_ACK && *s == sn).count()
+}
+
+/// Delayed re-ACKs (the fix for the sequence-wrap data-corruption bug): a
+/// freshly stored packet gets its normal immediate ACK, then exactly one
+/// extra ACK after `data::REACK_DELAY` has elapsed -- not before, and not
+/// more than once. This is what lets a lost ACK be repaired before the Go
+/// client's RTO fires and it retransmits into a future sequence-number wrap.
+#[tokio::test]
+async fn stored_data_gets_immediate_ack_and_one_delayed_reack() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(12, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    arq.process_received_data(0, b"x");
+    assert_eq!(ack_pushes(&enqueuer, 0), 1, "immediate ACK missing");
+
+    // Not due yet: still just the immediate ACK.
+    tokio::time::sleep(crate::data::REACK_DELAY / 2).await;
+    assert_eq!(ack_pushes(&enqueuer, 0), 1, "re-ACK fired before its delay elapsed");
+
+    // Past REACK_DELAY: exactly one extra re-ACK, and no more show up later.
+    tokio::time::sleep(crate::data::REACK_DELAY + Duration::from_millis(200)).await;
+    assert_eq!(ack_pushes(&enqueuer, 0), 2, "expected exactly one delayed re-ACK");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(ack_pushes(&enqueuer, 0), 2, "re-ACK must not repeat");
+}
+
+/// Data the server drops without ever ACKing it (out of window / beyond peer
+/// reach, see `far_ahead_data_within_peer_reach_is_not_acked`) must never get
+/// a re-ACK either: ACKing data we did not keep would make the peer believe
+/// it was delivered and it would never resend it, losing data.
+#[tokio::test]
+async fn unstored_data_never_gets_a_reack() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let cfg = Config { window_size: 4096, ..Config::default() };
+    let arq = crate::Arq::new(13, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), cfg);
+    arq.start();
+    {
+        let mut s = arq.inner.lock().unwrap();
+        s.rcv_nxt = 1000;
+        s.rcv_highest = 1000u16.wrapping_add(arq.receive_window_size as u16);
+    }
+    let ahead = (arq.receive_window_size + crate::MAX_WINDOW_SIZE / 2) as u16;
+    let sn = 1000u16.wrapping_add(ahead);
+
+    arq.process_received_data(sn, b"future");
+    assert_eq!(ack_pushes(&enqueuer, sn), 0);
+
+    tokio::time::sleep(crate::data::REACK_DELAY + Duration::from_millis(200)).await;
+    assert_eq!(ack_pushes(&enqueuer, sn), 0, "unstored data must never be (re-)ACKed");
+    assert!(arq.inner.lock().unwrap().pending_reacks.is_empty());
+}
+
+/// The pending re-ACK FIFO must stay bounded even under a flood of duplicate
+/// deliveries of the same sequence number (each duplicate schedules another
+/// entry), and must be dropped entirely once the stream closes.
+#[tokio::test]
+async fn pending_reacks_are_bounded_and_cleared_on_close() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let cfg = Config { window_size: 300, ..Config::default() };
+    // Don't call start(): process_received_data is synchronous and we want to
+    // inspect the FIFO before the retransmit loop has a chance to drain it.
+    let arq = crate::Arq::new(14, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), cfg);
+
+    for _ in 0..(arq.receive_window_size + 50) {
+        arq.process_received_data(0, b"x");
+    }
+    let len = arq.inner.lock().unwrap().pending_reacks.len();
+    assert!(len > 0);
+    assert!(len <= arq.receive_window_size, "pending_reacks grew past its bound: {len} > {}", arq.receive_window_size);
+
+    arq.close("test forced close", CloseOptions { force: true, ..Default::default() });
+    assert!(arq.inner.lock().unwrap().pending_reacks.is_empty(), "pending_reacks not cleared on close");
+}

@@ -3,6 +3,7 @@
 
 use crate::types::{AdaptiveRtoState, ControlItem, DataItem, StreamState};
 use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
 use std::time::Instant;
 
 pub(crate) struct ArqState {
@@ -71,6 +72,15 @@ pub(crate) struct ArqState {
     pub last_data_nack_sent: FxHashMap<u16, Instant>,
 
     pub pending_inbound: i64,
+
+    /// FIFO of `(sn, due_instant)` for delayed re-ACKs of inbound STREAM_DATA
+    /// that this side has actually stored (see `Arq::store_received_data`).
+    /// Repairs an ACK the peer's UDP socket dropped before its retransmit
+    /// timeout fires. Entries are appended in non-decreasing `due_instant`
+    /// order (the delay is a fixed constant), so the front of the queue is
+    /// always the next one due. Bounded in `Arq::schedule_reack` so a chatty
+    /// peer can't grow this without bound.
+    pub pending_reacks: VecDeque<(u16, Instant)>,
 }
 
 impl ArqState {
@@ -132,6 +142,7 @@ impl ArqState {
             first_data_nack_seen: FxHashMap::default(),
             last_data_nack_sent: FxHashMap::default(),
             pending_inbound: 0,
+            pending_reacks: VecDeque::new(),
         }
     }
 

@@ -3,7 +3,24 @@
 use crate::arq::Arq;
 use crate::state::ArqState;
 use crate::util::seq_behind;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long after storing a fresh STREAM_DATA packet we send one extra
+/// STREAM_DATA_ACK for it, on top of the immediate one.
+///
+/// Forensics on the Go client (see task notes) measured its RTO for a lost
+/// ACK at a median of ~0.3s and a max of ~1-2s under load. 150ms leaves
+/// roughly half of that median as margin: it is late enough that almost all
+/// deliveries only ever see the immediate ACK (the client's `ReceiveAck`
+/// treats a re-ACK for a sequence number it has already retired as a pure
+/// no-op — see the Go client citation in the task report), but early enough
+/// to reliably land before the client's RTO fires and it retransmits a
+/// packet whose sequence number may collide with new data a 16-bit wrap
+/// later. Combined with `retransmit_loop` waking at least as often as
+/// `REACK_DELAY` while any re-ACK is pending (see `loops.rs`), the worst-case
+/// extra latency on top of this constant is one wake-up quantum, not a whole
+/// idle-interval sleep.
+pub(crate) const REACK_DELAY: Duration = Duration::from_millis(150);
 
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
@@ -130,6 +147,15 @@ impl Arq {
             if !exists {
                 s.rcv_buf.insert(sn, data.to_vec());
             }
+
+            // We are about to ACK `sn` immediately below, and it is actually
+            // stored (either just now or already, on a duplicate): schedule
+            // one extra ACK for it a bit later, in case the immediate one is
+            // the one that gets lost at the peer's socket. Never do this for
+            // data we return early without storing/ACKing above (out-of-
+            // window, too far ahead, or the receive buffer is full) — ACKing
+            // data we didn't keep would make the peer think it was delivered.
+            self.schedule_reack_locked(&mut s, sn, now);
         }
 
         self.enqueuer.push_tx_packet(
@@ -147,6 +173,60 @@ impl Arq {
             self.clear_sent_data_nack(sn);
         }
         self.maybe_send_data_nacks(sn);
+    }
+
+    /// Appends `(sn, now + REACK_DELAY)` to the pending re-ACK FIFO, dropping
+    /// the oldest entry first if it is already at capacity. Must be called
+    /// with `s` already locked; wakes `retransmit_loop` so it re-evaluates
+    /// its sleep interval instead of possibly sleeping through the whole
+    /// "nothing pending" interval before noticing this entry.
+    fn schedule_reack_locked(&self, s: &mut ArqState, sn: u16, now: Instant) {
+        if s.pending_reacks.len() >= self.receive_window_size.max(1) {
+            s.pending_reacks.pop_front();
+        }
+        s.pending_reacks.push_back((sn, now + REACK_DELAY));
+        self.reack_scheduled.notify_one();
+    }
+
+    /// Emits every scheduled re-ACK whose delay has elapsed. Called from
+    /// `retransmit_loop` (see `loops.rs`) instead of its own timer so it
+    /// shares that loop's wake-ups.
+    pub(crate) fn emit_due_reacks(&self, now: Instant) {
+        let due: Vec<u16> = {
+            let mut s = self.inner.lock().unwrap();
+            let mut due = Vec::new();
+            while let Some(&(sn, at)) = s.pending_reacks.front() {
+                if at > now {
+                    break;
+                }
+                s.pending_reacks.pop_front();
+                due.push(sn);
+            }
+            due
+        };
+
+        for sn in due {
+            self.enqueuer.push_tx_packet(
+                enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+                enums::PACKET_STREAM_DATA_ACK,
+                sn,
+                0,
+                0,
+                0,
+                std::time::Duration::ZERO,
+                &[],
+            );
+        }
+    }
+
+    /// The instant the next scheduled re-ACK (if any) becomes due, for
+    /// `retransmit_loop` to size its sleep so it wakes in time rather than
+    /// discovering the due entry late. Also doubles as "is any re-ACK
+    /// pending", which `retransmit_loop` counts as pending work so an
+    /// upload-only stream (no outbound send data) still gets the fast
+    /// wake-up interval while a re-ACK is in flight.
+    pub(crate) fn next_reack_due(&self) -> Option<Instant> {
+        self.inner.lock().unwrap().pending_reacks.front().map(|&(_, at)| at)
     }
 
     /// Resolves inbound `STREAM_DATA_ACK` and frees send-window backpressure slots.

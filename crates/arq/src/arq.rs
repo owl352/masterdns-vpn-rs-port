@@ -52,6 +52,11 @@ pub struct Arq {
     /// acked or cleared) so a paced `io_loop` can read again.
     pub(crate) data_dequeued: Notify,
     pub(crate) flush_signal: Notify,
+    /// Notified whenever a delayed re-ACK is scheduled (see
+    /// `Arq::schedule_reack`) so `loops::retransmit_loop` wakes promptly
+    /// instead of possibly sleeping through the whole "no pending send data"
+    /// interval before it notices there is now a due-soon re-ACK to emit.
+    pub(crate) reack_scheduled: Notify,
 
     // Plain std mutexes, not tokio's: `finalize_close` (a synchronous, non-async
     // method mirroring the Go original) must be able to drop these — and so
@@ -121,6 +126,7 @@ impl Arq {
             window_not_full: Notify::new(),
             data_dequeued: Notify::new(),
             flush_signal: Notify::new(),
+            reack_scheduled: Notify::new(),
             local_conn_read: Mutex::new(None),
             local_conn_write: Mutex::new(None),
             has_local_conn: AtomicBool::new(false),
@@ -588,6 +594,7 @@ pub(crate) fn clear_all_queues(state: &mut ArqState, clear_control: bool, window
     }
     state.first_data_nack_seen.clear();
     state.last_data_nack_sent.clear();
+    state.pending_reacks.clear();
     window_not_full.notify_one();
 }
 
@@ -606,5 +613,6 @@ pub(crate) fn clear_outbound_state_locked(state: &mut ArqState, clear_control: b
     }
     state.first_data_nack_seen.clear();
     state.last_data_nack_sent.clear();
+    state.pending_reacks.clear();
     window_not_full.notify_one();
 }
