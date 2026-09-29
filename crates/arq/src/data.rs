@@ -22,6 +22,21 @@ use std::time::{Duration, Instant};
 /// idle-interval sleep.
 pub(crate) const REACK_DELAY: Duration = Duration::from_millis(150);
 
+/// Upper bound on `ArqState::pending_reacks`. This is deliberately much
+/// bigger than any per-stream window: the FIFO holds one entry per *stored*
+/// packet for `REACK_DELAY`, and a fast upload can sustain tens of thousands
+/// of packets per second (measured well above 32768/0.15s), so bounding it by
+/// `receive_window_size` (a few thousand) caused the front of the queue —
+/// i.e. entries about to become due — to be evicted before they ever fired,
+/// silently defeating the fix under exactly the high-throughput load it
+/// targets. Sequence numbers only span 65536 values, so this caps the queue
+/// at four full wraps' worth of entries: generous enough that eviction should
+/// never happen in practice (each entry is 10 bytes, so the cap is a hard
+/// ceiling of ~2.5MB per stream, not a real memory concern), while still
+/// being a real, finite bound rather than unbounded growth if a stream is
+/// ever abandoned without its retransmit loop draining the queue.
+pub(crate) const REACK_QUEUE_CAP: usize = 4 * 65536;
+
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
     /// writer, all before returning. Go hands this to a separate rx goroutine;
@@ -181,7 +196,7 @@ impl Arq {
     /// its sleep interval instead of possibly sleeping through the whole
     /// "nothing pending" interval before noticing this entry.
     fn schedule_reack_locked(&self, s: &mut ArqState, sn: u16, now: Instant) {
-        if s.pending_reacks.len() >= self.receive_window_size.max(1) {
+        if s.pending_reacks.len() >= REACK_QUEUE_CAP {
             s.pending_reacks.pop_front();
         }
         s.pending_reacks.push_back((sn, now + REACK_DELAY));

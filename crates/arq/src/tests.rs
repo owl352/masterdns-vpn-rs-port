@@ -366,12 +366,16 @@ async fn pending_reacks_are_bounded_and_cleared_on_close() {
     // inspect the FIFO before the retransmit loop has a chance to drain it.
     let arq = crate::Arq::new(14, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), cfg);
 
-    for _ in 0..(arq.receive_window_size + 50) {
+    for _ in 0..(crate::data::REACK_QUEUE_CAP + 50) {
         arq.process_received_data(0, b"x");
     }
     let len = arq.inner.lock().unwrap().pending_reacks.len();
     assert!(len > 0);
-    assert!(len <= arq.receive_window_size, "pending_reacks grew past its bound: {len} > {}", arq.receive_window_size);
+    assert!(
+        len <= crate::data::REACK_QUEUE_CAP,
+        "pending_reacks grew past its bound: {len} > {}",
+        crate::data::REACK_QUEUE_CAP
+    );
 
     arq.close("test forced close", CloseOptions { force: true, ..Default::default() });
     assert!(arq.inner.lock().unwrap().pending_reacks.is_empty(), "pending_reacks not cleared on close");

@@ -78,8 +78,8 @@ pub(crate) struct ArqState {
     /// Repairs an ACK the peer's UDP socket dropped before its retransmit
     /// timeout fires. Entries are appended in non-decreasing `due_instant`
     /// order (the delay is a fixed constant), so the front of the queue is
-    /// always the next one due. Bounded in `Arq::schedule_reack` so a chatty
-    /// peer can't grow this without bound.
+    /// always the next one due. Bounded in `Arq::schedule_reack_locked` so a
+    /// chatty peer can't grow this without bound.
     pub pending_reacks: VecDeque<(u16, Instant)>,
 }
 
