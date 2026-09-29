@@ -453,15 +453,22 @@ async fn pending_reacks_are_bounded_and_cleared_on_close() {
     assert!(arq.inner.lock().unwrap().pending_reacks.is_empty(), "pending_reacks not cleared on close");
 }
 
-/// `store_received_data` must demote the immediate ACK it queues for a
-/// freshly-stored packet to `crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY`
-/// (LOW) exactly when the enqueuer reports download data already queued
-/// (`has_queued_download_data`), and keep it at its normal CRITICAL priority
-/// otherwise - so a lone ACK never preempts a stream's own waiting download
-/// data, but still rides its own reply promptly when there is nothing to
-/// preempt.
+/// `store_received_data` must queue the immediate ACK for a freshly-stored
+/// packet at its normal CRITICAL priority when the enqueuer reports no
+/// download data queued, and skip queuing it at all (relying solely on the
+/// delayed re-ACK, already unconditionally scheduled via
+/// `schedule_reack_locked`) when `has_queued_download_data` is true - so a
+/// lone ACK never preempts a stream's own waiting download data, but still
+/// rides its own reply promptly when there is nothing to preempt.
+///
+/// (A prior version of this fix instead demoted the immediate ACK to LOW
+/// priority and force-released it after a short bound; that collided with
+/// `REACK_PRIORITY`'s own LOW-priority duplicates and caused a severe
+/// duplex-throughput regression - see the doc comment on
+/// `store_received_data` above for the full account. This test locks in the
+/// corrected "skip entirely" behavior instead.)
 #[tokio::test]
-async fn immediate_ack_priority_follows_download_backlog_signal() {
+async fn immediate_ack_skipped_when_download_backlogged_kept_when_not() {
     let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
     let cfg = Config { window_size: 300, ..Config::default() };
     // Synchronous, like the FIFO test above: no need for the background loops.
@@ -472,15 +479,17 @@ async fn immediate_ack_priority_follows_download_backlog_signal() {
     assert_eq!(
         enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0),
         Some(enums::PACKET_PRIORITY_CRITICAL),
-        "with no download backlog the immediate ACK must stay CRITICAL"
+        "with no download backlog the immediate ACK must still be sent, at CRITICAL"
     );
 
     enqueuer.set_has_backlog(true);
     arq.process_received_data(1, b"backlogged");
     assert_eq!(
         enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 1),
-        Some(crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY),
-        "with download backlog the immediate ACK must be demoted below CRITICAL"
+        None,
+        "with download backlog the immediate ACK must be skipped entirely, not merely demoted"
     );
-    assert_eq!(crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY, enums::PACKET_PRIORITY_LOW);
+    // The delayed re-ACK safety net is still scheduled regardless, so sn=1
+    // is never left permanently unacknowledged.
+    assert!(arq.inner.lock().unwrap().pending_reacks.iter().any(|&(sn, _)| sn == 1), "sn=1 must still have a delayed re-ACK scheduled");
 }

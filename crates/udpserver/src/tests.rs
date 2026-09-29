@@ -350,64 +350,31 @@ async fn duplicate_stream_data_ack_gets_tunnel_response_not_empty_answer() {
     );
 }
 
-/// Regression test for the "lone-ACK reply" fix: `arq::data::
-/// store_received_data` demotes a freshly-stored upload packet's immediate
-/// STREAM_DATA_ACK from CRITICAL to `IMMEDIATE_ACK_COALESCE_PRIORITY`
-/// (`PACKET_PRIORITY_LOW`) whenever the stream already has NORMAL-priority
-/// download data queued, and `StreamServer::pop_next_tx_packet` bounds how
-/// long that demoted ACK can then wait behind the backlog
-/// (`ACK_COALESCE_BOUND`). Exercises `StreamServer`'s queue directly (not
-/// through the full ARQ/session pipeline) since the two things under test -
-/// priority ordering and the age-based force-release - only depend on the
-/// queue and the `now` passed to `pop_next_tx_packet`, and driving `now`
-/// directly makes the bound check deterministic without a real sleep.
+/// `StreamServer::has_queued_download_data` (used by `arq::data::
+/// store_received_data` to decide whether to skip queuing a freshly-stored
+/// upload packet's immediate ACK) must reflect NORMAL-priority (download
+/// STREAM_DATA) backlog exactly, and popping must still return that queued
+/// download data - i.e. nothing about detecting the backlog disturbs the
+/// stream's own strict-priority queue order.
+///
+/// (An earlier version of this fix instead demoted the immediate ACK to
+/// `PACKET_PRIORITY_LOW` and added a dequeue-time bound that force-released
+/// a LOW-priority ACK once it had aged past a short window. That bound could
+/// not tell a freshly-demoted ACK apart from an ordinary already-scheduled
+/// `arq::data::REACK_PRIORITY` duplicate re-ACK sitting at the front of the
+/// same LOW level - and since a re-ACK is by construction already
+/// `REACK_DELAY` (150ms) old by the time it is pushed, the bound force-
+/// released it *ahead of any waiting NORMAL data too* on essentially every
+/// call, inverting priority order instead of only bending it as a last
+/// resort. Measured on `socks-echo-multi` (8 duplex SOCKS streams,
+/// `-client-dup 2 -client-setup-dup 2 -client-batch 1`), this starved
+/// download data almost completely and made most runs time out instead of
+/// completing in ~1-3s. This version does not add any such per-item bound or
+/// queue-level change at all - see `arq::data::store_received_data`'s doc
+/// comment for the corrected design, which relies entirely on the
+/// already-scheduled, already-proven-safe delayed re-ACK instead.)
 #[tokio::test]
-async fn demoted_ack_yields_to_backlogged_download_data_then_forces_out_after_bound() {
-    use crate::stream::StreamServer;
-    use arq::PacketEnqueuer;
-
-    let logger: Arc<dyn arq::ArqLogger> = Arc::new(logger::Logger::new("test", "ERROR"));
-    let stream = StreamServer::new(1, 1, arq::Config::default(), 1200, 8, logger);
-
-    // Two download chunks already queued at NORMAL - what
-    // `has_queued_download_data` would have found non-empty when
-    // `store_received_data` decided to demote the immediate ACK below.
-    assert!(stream.push_tx_packet(enums::PACKET_PRIORITY_NORMAL, enums::PACKET_STREAM_DATA, 0, 0, 0, 0, std::time::Duration::ZERO, b"chunk0"));
-    assert!(stream.push_tx_packet(enums::PACKET_PRIORITY_NORMAL, enums::PACKET_STREAM_DATA, 1, 0, 0, 0, std::time::Duration::ZERO, b"chunk1"));
-    // The demoted immediate ACK itself, as `store_received_data` would queue it.
-    assert!(stream.push_tx_packet(enums::PACKET_PRIORITY_LOW, enums::PACKET_STREAM_DATA_ACK, 42, 0, 0, 0, std::time::Duration::ZERO, &[]));
-
-    // Fresh: strict priority order must prefer the waiting download data
-    // over the not-yet-aged demoted ACK.
-    let (first, _priority) = stream.pop_next_tx_packet(std::time::Instant::now()).expect("expected the queued download data");
-    assert_eq!(first.packet_type, enums::PACKET_STREAM_DATA, "a fresh demoted ACK must not preempt waiting download data");
-    assert_eq!(first.sequence_num, 0);
-
-    // Backlog is still non-empty (chunk1 remains queued). Simulate
-    // `ACK_COALESCE_BOUND` having elapsed since the ACK was queued - no real
-    // sleep needed, since the age check is `now - created_at` and
-    // `created_at` was set to the real `Instant::now()` at push time above.
-    let later = std::time::Instant::now() + crate::stream::ACK_COALESCE_BOUND + std::time::Duration::from_millis(5);
-    let (second, priority) = stream.pop_next_tx_packet(later).expect("expected the aged ACK to be forced out despite the backlog");
-    assert_eq!(second.packet_type, enums::PACKET_STREAM_DATA_ACK, "an ACK that waited past ACK_COALESCE_BOUND must be released even with backlog still queued");
-    assert_eq!(second.sequence_num, 42);
-    assert_eq!(priority, enums::PACKET_PRIORITY_LOW);
-
-    // The remaining download chunk is untouched by the forced release.
-    let (third, _priority) = stream.pop_next_tx_packet(std::time::Instant::now()).expect("expected the remaining queued download data");
-    assert_eq!(third.packet_type, enums::PACKET_STREAM_DATA);
-    assert_eq!(third.sequence_num, 1);
-
-    assert!(stream.pop_next_tx_packet(std::time::Instant::now()).is_none(), "queue should be drained");
-}
-
-/// Companion to the above: `arq::data::store_received_data` only demotes the
-/// immediate ACK when `has_queued_download_data` is true; with no download
-/// backlog it must keep the ACK at its normal CRITICAL priority so it still
-/// rides the reply to its own query exactly as before this fix (matches
-/// `stream_syn_dials_and_forwards_data_end_to_end`'s existing assertion).
-#[tokio::test]
-async fn immediate_ack_stays_critical_priority_without_download_backlog() {
+async fn has_queued_download_data_reflects_backlog_without_disturbing_pop_order() {
     use crate::stream::StreamServer;
     use arq::PacketEnqueuer;
 
@@ -415,17 +382,19 @@ async fn immediate_ack_stays_critical_priority_without_download_backlog() {
     let stream = StreamServer::new(1, 1, arq::Config::default(), 1200, 8, logger);
     assert!(!stream.has_queued_download_data());
 
-    assert!(stream.push_tx_packet(
-        enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
-        enums::PACKET_STREAM_DATA_ACK,
-        7,
-        0,
-        0,
-        0,
-        std::time::Duration::ZERO,
-        &[]
-    ));
-    let (item, priority) = stream.pop_next_tx_packet(std::time::Instant::now()).expect("expected the ACK");
-    assert_eq!(item.packet_type, enums::PACKET_STREAM_DATA_ACK);
+    assert!(stream.push_tx_packet(enums::PACKET_PRIORITY_NORMAL, enums::PACKET_STREAM_DATA, 0, 0, 0, 0, std::time::Duration::ZERO, b"chunk0"));
+    assert!(stream.has_queued_download_data());
+
+    // A CRITICAL-priority ACK queued alongside it (as `store_received_data`
+    // does when there is *no* backlog) must still come out first - detecting
+    // the backlog must not itself change ordinary priority order.
+    assert!(stream.push_tx_packet(enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK), enums::PACKET_STREAM_DATA_ACK, 7, 0, 0, 0, std::time::Duration::ZERO, &[]));
+    let (first, priority) = stream.pop_next_tx_packet().expect("expected the CRITICAL ACK first");
+    assert_eq!(first.packet_type, enums::PACKET_STREAM_DATA_ACK);
     assert_eq!(priority, enums::PACKET_PRIORITY_CRITICAL);
+
+    let (second, _priority) = stream.pop_next_tx_packet().expect("expected the queued download data");
+    assert_eq!(second.packet_type, enums::PACKET_STREAM_DATA);
+    assert_eq!(second.sequence_num, 0);
+    assert!(!stream.has_queued_download_data(), "backlog signal must clear once the data is dequeued");
 }

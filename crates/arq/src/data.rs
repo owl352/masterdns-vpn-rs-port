@@ -74,10 +74,11 @@ pub(crate) const REACK_QUEUE_CAP: usize = 4 * 65536;
 /// by `loops::READ_AHEAD_DATA_PACKETS`).
 pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
 
-/// Queue priority for the *immediate* STREAM_DATA_ACK emitted synchronously
-/// below, used instead of `default_packet_priority(PACKET_STREAM_DATA_ACK)`
-/// (CRITICAL) whenever `has_queued_download_data` reports this stream
-/// already has NORMAL-priority download data waiting.
+/// Whether `store_received_data` below skips queuing the *immediate*
+/// STREAM_DATA_ACK it would otherwise send synchronously at
+/// `default_packet_priority(PACKET_STREAM_DATA_ACK)` (CRITICAL) — it does,
+/// whenever `has_queued_download_data` reports this stream already has
+/// NORMAL-priority download data waiting.
 ///
 /// Root cause this addresses (distinct from, but analogous to,
 /// `REACK_PRIORITY` above): a DNS reply carries at most one item from a
@@ -90,20 +91,36 @@ pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
 /// download phases) found 37% of all server replies were exactly this: a
 /// single lone STREAM_DATA_ACK.
 ///
-/// Sharing `PACKET_PRIORITY_LOW` with `REACK_PRIORITY` puts this ACK behind
-/// the stream's own pending download data (NORMAL) but still above idle
-/// PING/PONG, and — like the delayed re-ACK copy — makes it eligible for
-/// `postsession::pack_control_blocks`'s opportunistic LOW-priority draining,
-/// so it still goes out promptly, just packed alongside other control
-/// packets instead of alone. `udpserver::stream::StreamServer::
-/// pop_next_tx_packet`'s `ACK_COALESCE_BOUND` check bounds how long this can
-/// actually wait behind that backlog (well inside the client's ~0.25-0.3s
-/// minimum upload RTO), so this never risks the retransmission -> 16-bit
-/// sequence-wrap corruption class of bug `REACK_DELAY` exists to guard
-/// against. When there is no such backlog, the ACK keeps its normal CRITICAL
-/// priority and rides the reply to its own query exactly as before — this
-/// only changes behavior when it would otherwise have displaced data.
-pub(crate) const IMMEDIATE_ACK_COALESCE_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
+/// An earlier version of this fix queued the immediate ACK anyway, just at
+/// `PACKET_PRIORITY_LOW` (`REACK_PRIORITY`'s tier) instead of CRITICAL, plus
+/// a dequeue-time check that force-released a LOW-priority ACK once it had
+/// waited past a short bound, so it could never starve behind a sustained
+/// backlog. That force-release could not tell a freshly-demoted immediate
+/// ACK apart from an ordinary already-scheduled `REACK_PRIORITY` duplicate
+/// sitting at the front of the same LOW level — and since a re-ACK is by
+/// construction already `REACK_DELAY` (150ms) old by the time it's pushed,
+/// it was "aged past the bound" the instant it became visible. The
+/// dequeue-time check then force-released it *ahead of any waiting NORMAL
+/// data too*, on every single call, effectively inverting the priority order
+/// it was supposed to only bend as a last resort: measured on
+/// `socks-echo-multi` (8 duplex SOCKS streams, `-client-dup 2
+/// -client-setup-dup 2 -client-batch 1`), this starved download data almost
+/// completely and made most runs time out entirely instead of completing in
+/// ~1-3s.
+///
+/// This version sidesteps that failure mode by not queuing a second,
+/// separately-timed copy at all: `store_received_data` (below) already
+/// unconditionally schedules a delayed re-ACK for `sn` via
+/// `schedule_reack_locked` (next `REACK_DELAY`/150ms), regardless of whether
+/// the immediate copy is sent. Skipping the immediate copy when download
+/// data is backlogged just lets that already-scheduled, already-proven-safe
+/// re-ACK be the *only* copy instead of a redundant second one — reusing
+/// exactly the same timing guarantee `REACK_DELAY`'s own doc comment
+/// justifies against the client's measured RTO, instead of inventing a new,
+/// separately-tuned bound that has to coexist with it in the same queue
+/// level. When there is no such backlog, the immediate ACK is still sent at
+/// its normal CRITICAL priority exactly as before — this only changes
+/// behavior when the immediate copy would otherwise have displaced data.
 
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
@@ -241,21 +258,26 @@ impl Arq {
             self.schedule_reack_locked(&mut s, sn, now);
         }
 
-        // See `IMMEDIATE_ACK_COALESCE_PRIORITY`'s doc comment: only demote
-        // below CRITICAL when this stream's own download data would
-        // otherwise be displaced by this ACK in the next reply.
-        let ack_priority =
-            if self.enqueuer.has_queued_download_data() { IMMEDIATE_ACK_COALESCE_PRIORITY } else { enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK) };
-        self.enqueuer.push_tx_packet(
-            ack_priority,
-            enums::PACKET_STREAM_DATA_ACK,
-            sn,
-            0,
-            0,
-            0,
-            std::time::Duration::ZERO,
-            &[],
-        );
+        // See the doc comment above `store_received_data` (search
+        // "Root cause this addresses"): only skip the immediate copy when
+        // this stream's own download data would otherwise be displaced by
+        // it in the next reply. `schedule_reack_locked` above has already
+        // unconditionally scheduled a delayed re-ACK for `sn` regardless, so
+        // skipping the immediate copy here never leaves `sn` permanently
+        // unacknowledged - it just lets that already-scheduled copy be the
+        // only one instead of a redundant second one.
+        if !self.enqueuer.has_queued_download_data() {
+            self.enqueuer.push_tx_packet(
+                enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+                enums::PACKET_STREAM_DATA_ACK,
+                sn,
+                0,
+                0,
+                0,
+                std::time::Duration::ZERO,
+                &[],
+            );
+        }
 
         if !exists {
             self.clear_sent_data_nack(sn);
