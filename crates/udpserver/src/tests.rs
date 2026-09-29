@@ -226,3 +226,126 @@ async fn stream_syn_dials_and_forwards_data_end_to_end() {
     let n = tokio::time::timeout(std::time::Duration::from_secs(2), server_conn.read(&mut buf)).await.unwrap().unwrap();
     assert_eq!(&buf[..n], b"hello upstream");
 }
+
+/// Regression test for the `handlePostSessionPacket`/`handle_post_session_packet`
+/// parity bug: Go always lets the query fall through to `serveQueuedOrPong`
+/// after post-session dispatch (it calls `dispatchPostSessionPacket` but
+/// discards the bool and unconditionally returns `true`), so a post-session
+/// packet type the dispatcher doesn't specifically handle - like a second,
+/// duplicate copy of a client `STREAM_DATA_ACK` for a sequence number that's
+/// already been acknowledged (exactly what happens with
+/// `PACKET_DUPLICATION_COUNT` = 2, the real-world default) - still gets
+/// queued download data or a PONG in reply. Before the fix, the Rust port
+/// returned the dispatcher's `false` straight through, which made
+/// `ingress::handle_tunnel_candidate` answer with an empty NODATA response
+/// instead - burning a pull on a query the real client will send routinely.
+#[tokio::test]
+async fn duplicate_stream_data_ack_gets_tunnel_response_not_empty_answer() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr: SocketAddr = listener.local_addr().unwrap();
+    let accept_task = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+
+    let mut cfg = test_config();
+    cfg.protocol_type = "TCP".to_string();
+    cfg.forward_ip = target_addr.ip().to_string();
+    cfg.forward_port = target_addr.port();
+    let log = Arc::new(logger::Logger::new("test", "ERROR"));
+    let codec = Arc::new(security::Codec::new(0, "test-key").unwrap());
+    let server = Server::new(cfg, log, codec);
+
+    let accept = do_session_init(&server);
+    let stream_id: u16 = 1;
+
+    let syn_query = build_query(
+        &server,
+        &vpnproto::Packet {
+            packet_type: enums::PACKET_STREAM_SYN,
+            session_id: accept.session_id,
+            session_cookie: accept.session_cookie,
+            stream_id,
+            has_stream_id: true,
+            ..Default::default()
+        },
+    );
+    let syn_response = server.handle_packet(&syn_query).unwrap();
+    assert_eq!(extract_response(&syn_response).packet_type, enums::PACKET_STREAM_SYN_ACK);
+
+    let mut server_conn =
+        tokio::time::timeout(std::time::Duration::from_secs(5), accept_task).await.expect("listener should accept the dialed connection").unwrap();
+
+    let mut connected = false;
+    for _ in 0..200 {
+        let poll_query = build_query(
+            &server,
+            &vpnproto::Packet { packet_type: enums::PACKET_PING, session_id: accept.session_id, session_cookie: accept.session_cookie, ..Default::default() },
+        );
+        let response = server.handle_packet(&poll_query).unwrap();
+        if extract_response(&response).packet_type == enums::PACKET_STREAM_CONNECTED {
+            connected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(connected, "expected a PACKET_STREAM_CONNECTED within the poll budget");
+
+    // Write bytes on the upstream side so the server queues a STREAM_DATA
+    // (download) packet for the client to pull.
+    server_conn.write_all(b"download payload").await.unwrap();
+
+    // Poll session queries until the download data packet shows up in a
+    // reply, capturing its sequence number (matches the client's normal
+    // download-then-ACK flow).
+    let mut acked_sequence_num: Option<u16> = None;
+    for _ in 0..200 {
+        let poll_query = build_query(
+            &server,
+            &vpnproto::Packet { packet_type: enums::PACKET_PING, session_id: accept.session_id, session_cookie: accept.session_cookie, ..Default::default() },
+        );
+        let response = server.handle_packet(&poll_query).unwrap();
+        let vpn_response = extract_response(&response);
+        if vpn_response.packet_type == enums::PACKET_STREAM_DATA && vpn_response.stream_id == stream_id {
+            acked_sequence_num = Some(vpn_response.sequence_num);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let sequence_num = acked_sequence_num.expect("expected a STREAM_DATA download packet within the poll budget");
+
+    // First STREAM_DATA_ACK: a genuinely new ack, consumed by
+    // `consume_inbound_stream_ack` / `arq::receive_ack`.
+    let ack_query = build_query(
+        &server,
+        &vpnproto::Packet {
+            packet_type: enums::PACKET_STREAM_DATA_ACK,
+            session_id: accept.session_id,
+            session_cookie: accept.session_cookie,
+            stream_id,
+            has_stream_id: true,
+            sequence_num,
+            has_sequence_num: true,
+            ..Default::default()
+        },
+    );
+    let first_ack_response = server.handle_packet(&ack_query).expect("first ACK query should get a response");
+    // Whatever this carries (queued data/PONG), it must be a real tunnel
+    // reply, not an empty NODATA answer.
+    dnsparser::extract_vpn_response(&first_ack_response, false).expect("first ACK's reply should carry a tunnel payload");
+
+    // Second, duplicate copy of the same STREAM_DATA_ACK (as sent by the
+    // real client under PACKET_DUPLICATION_COUNT=2): the sequence is already
+    // removed from the ARQ's send buffer, so `arq::receive_ack` returns
+    // false and dispatch "misses" it - this must still fall through to
+    // `serve_queued_or_pong` instead of an empty answer.
+    let duplicate_ack_response = server.handle_packet(&ack_query).expect("duplicate ACK query should get a response");
+    let vpn_response = dnsparser::extract_vpn_response(&duplicate_ack_response, false)
+        .expect("duplicate ACK's reply should carry a tunnel payload (queued data/PONG), not an empty NODATA answer");
+    assert!(
+        vpn_response.packet_type == enums::PACKET_PONG
+            || vpn_response.packet_type == enums::PACKET_STREAM_DATA
+            || vpn_response.packet_type == enums::PACKET_PACKED_CONTROL_BLOCKS,
+        "unexpected packet type in reply to duplicate ACK: 0x{:02x}",
+        vpn_response.packet_type
+    );
+}

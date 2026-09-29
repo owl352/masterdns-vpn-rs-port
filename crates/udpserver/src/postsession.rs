@@ -129,7 +129,19 @@ impl Server {
             self.handle_packed_control_blocks_request(vpn_packet, record, now);
             return true;
         }
-        self.dispatch_post_session_packet(vpn_packet, record, now)
+        // Matches Go's `handlePostSessionPacket`: the dispatcher's bool result
+        // is used only internally by `dispatchPostSessionPacket`'s callers in
+        // Go (there are none outside packed-block replay, which ignores it
+        // too - see `handlePackedControlBlocksRequest`), never to decide
+        // whether *this* query gets an empty NODATA reply instead of queued
+        // data/PONG. A dispatch "miss" (e.g. a duplicate STREAM_DATA_ACK that
+        // `preprocessInboundPacket`/`consumeInboundStreamAck` already
+        // consumed, or any other packet type the switch's `default` doesn't
+        // recognize) must still let the query proceed to
+        // `serve_queued_or_pong` so it can carry queued download data/PONG
+        // instead of wasting the pull on an empty answer.
+        self.dispatch_post_session_packet(vpn_packet, record, now);
+        true
     }
 
     fn dispatch_post_session_packet(&self, p: &vpnproto::Packet, record: &SessionRuntimeView, now: Instant) -> bool {
