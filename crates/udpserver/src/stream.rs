@@ -23,6 +23,21 @@ fn effective_priority(packet_type: u8, base_priority: i32) -> i32 {
     enums::normalize_packet_priority(packet_type, base_priority)
 }
 
+/// Upper bound on how long a STREAM_DATA_ACK demoted to
+/// `PACKET_PRIORITY_LOW` (see `has_queued_download_data` /
+/// `arq::data::store_received_data`) may sit behind this stream's own
+/// download backlog before `pop_next_tx_packet` forces it out anyway.
+///
+/// The client's upload RTO can be as low as ~0.25-0.3s, so this bound must
+/// leave generous margin under that: demoting the ACK to let download data
+/// through must never delay it long enough to cause a client retransmission.
+/// 25ms keeps it inside the ~20-30ms target while still being long enough to
+/// batch several demoted ACKs into one PACKED_CONTROL_BLOCKS reply (see
+/// `postsession::pack_control_blocks`'s `PACKABLE_SCAN_MAX_PRIORITY`, which
+/// already reaches LOW-priority items) instead of trickling out one at a
+/// time.
+pub(crate) const ACK_COALESCE_BOUND: Duration = Duration::from_millis(25);
+
 pub struct StreamServer {
     pub id: u16,
     pub session_id: u8,
@@ -156,7 +171,32 @@ impl StreamServer {
         self.tx_queue.fast_size()
     }
 
-    pub fn pop_next_tx_packet(&self) -> Option<(ServerStreamTxPacket, i32)> {
+    /// Pops the next queued packet for this stream's turn in
+    /// `postsession::dequeue_session_response`.
+    ///
+    /// Before falling back to strict priority order, checks whether the LOW
+    /// level's front item is a STREAM_DATA_ACK that has been waiting at
+    /// least `ACK_COALESCE_BOUND` (see that constant) and, if so, forces it
+    /// out now regardless of what else is queued. This is the bound half of
+    /// the fix in `arq::data::store_received_data`/`has_queued_download_data`:
+    /// that fix demotes a freshly-stored upload packet's immediate ACK to
+    /// LOW priority when this stream also has NORMAL-priority download data
+    /// queued, so a reply prefers sending that data instead of the lone ACK
+    /// — strict priority order alone would then let a sustained download
+    /// backlog starve the ACK indefinitely (the client's upload RTO can be
+    /// as low as ~0.25-0.3s, and a late-enough re-ACK/retransmission risks
+    /// the 16-bit sequence-wrap corruption bug `REACK_DELAY` exists to
+    /// avoid), so this check guarantees it is released well inside that
+    /// margin instead.
+    pub fn pop_next_tx_packet(&self, now: Instant) -> Option<(ServerStreamTxPacket, i32)> {
+        let aged_ack = self.tx_queue.pop_if(
+            enums::PACKET_PRIORITY_LOW,
+            |p: &ServerStreamTxPacket| p.packet_type == enums::PACKET_STREAM_DATA_ACK && now.saturating_duration_since(p.created_at) >= ACK_COALESCE_BOUND,
+            |_| 0,
+        );
+        if let Some(item) = aged_ack {
+            return Some((item, enums::PACKET_PRIORITY_LOW));
+        }
         self.tx_queue.pop()
     }
 
@@ -284,5 +324,9 @@ impl arq::PacketEnqueuer for StreamServer {
     fn remove_queued_data_nack(&self, sequence_num: u16) -> bool {
         let key = enums::packet_identity_key(self.id, enums::PACKET_STREAM_DATA_NACK, sequence_num, 0);
         self.tx_queue.remove_by_key(key).is_some()
+    }
+
+    fn has_queued_download_data(&self) -> bool {
+        self.tx_queue.count(enums::PACKET_PRIORITY_NORMAL) > 0
     }
 }

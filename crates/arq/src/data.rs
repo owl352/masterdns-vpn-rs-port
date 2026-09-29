@@ -74,6 +74,37 @@ pub(crate) const REACK_QUEUE_CAP: usize = 4 * 65536;
 /// by `loops::READ_AHEAD_DATA_PACKETS`).
 pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
 
+/// Queue priority for the *immediate* STREAM_DATA_ACK emitted synchronously
+/// below, used instead of `default_packet_priority(PACKET_STREAM_DATA_ACK)`
+/// (CRITICAL) whenever `has_queued_download_data` reports this stream
+/// already has NORMAL-priority download data waiting.
+///
+/// Root cause this addresses (distinct from, but analogous to,
+/// `REACK_PRIORITY` above): a DNS reply carries at most one item from a
+/// stream's queue (`udpserver::postsession::dequeue_session_response`), so a
+/// CRITICAL-priority ACK queued while handling an upload query always
+/// outranks that same stream's own queued download STREAM_DATA (NORMAL) —
+/// the reply to that query spends its one packet slot on the bare ACK even
+/// when download data was sitting right behind it. A forensic capture of a
+/// real duplication-2 client running a 30s duplex speedtest (both upload and
+/// download phases) found 37% of all server replies were exactly this: a
+/// single lone STREAM_DATA_ACK.
+///
+/// Sharing `PACKET_PRIORITY_LOW` with `REACK_PRIORITY` puts this ACK behind
+/// the stream's own pending download data (NORMAL) but still above idle
+/// PING/PONG, and — like the delayed re-ACK copy — makes it eligible for
+/// `postsession::pack_control_blocks`'s opportunistic LOW-priority draining,
+/// so it still goes out promptly, just packed alongside other control
+/// packets instead of alone. `udpserver::stream::StreamServer::
+/// pop_next_tx_packet`'s `ACK_COALESCE_BOUND` check bounds how long this can
+/// actually wait behind that backlog (well inside the client's ~0.25-0.3s
+/// minimum upload RTO), so this never risks the retransmission -> 16-bit
+/// sequence-wrap corruption class of bug `REACK_DELAY` exists to guard
+/// against. When there is no such backlog, the ACK keeps its normal CRITICAL
+/// priority and rides the reply to its own query exactly as before — this
+/// only changes behavior when it would otherwise have displaced data.
+pub(crate) const IMMEDIATE_ACK_COALESCE_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
+
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
     /// writer, all before returning. Go hands this to a separate rx goroutine;
@@ -210,8 +241,13 @@ impl Arq {
             self.schedule_reack_locked(&mut s, sn, now);
         }
 
+        // See `IMMEDIATE_ACK_COALESCE_PRIORITY`'s doc comment: only demote
+        // below CRITICAL when this stream's own download data would
+        // otherwise be displaced by this ACK in the next reply.
+        let ack_priority =
+            if self.enqueuer.has_queued_download_data() { IMMEDIATE_ACK_COALESCE_PRIORITY } else { enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK) };
         self.enqueuer.push_tx_packet(
-            enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+            ack_priority,
             enums::PACKET_STREAM_DATA_ACK,
             sn,
             0,

@@ -838,7 +838,7 @@ impl Server {
                         continue;
                     }
                 }
-                if let Some((popped, _priority)) = stream.pop_next_tx_packet() {
+                if let Some((popped, _priority)) = stream.pop_next_tx_packet(now) {
                     stream.note_tx_packet_dequeued(&popped);
                     let should_skip = (popped.packet_type == enums::PACKET_STREAM_DATA || popped.packet_type == enums::PACKET_STREAM_RESEND)
                         && stream.arq().map(|a| !a.has_pending_sequence(popped.sequence_num)).unwrap_or(false);

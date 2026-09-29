@@ -45,6 +45,17 @@ pub trait PacketEnqueuer: Send + Sync {
     fn remove_queued_data_nack(&self, _sequence_num: u16) -> bool {
         false
     }
+    /// Optional: whether this stream currently has outbound (download)
+    /// STREAM_DATA queued and not yet dispatched. `store_received_data` in
+    /// `data.rs` consults this to decide whether a freshly-stored packet's
+    /// immediate ACK should ride at its normal CRITICAL priority or be
+    /// queued below download data instead, so replying to an upload query
+    /// doesn't spend the DNS reply's one packet slot on a lone ACK while
+    /// download data for the same stream sits waiting. Defaults to `false`
+    /// (never demote) for enqueuers that don't track this.
+    fn has_queued_download_data(&self) -> bool {
+        false
+    }
 }
 
 pub trait ArqLogger: Send + Sync {

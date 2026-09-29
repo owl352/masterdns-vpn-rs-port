@@ -14,6 +14,9 @@ struct MockEnqueuer {
     /// need to change).
     priorities: Mutex<Vec<(i32, u8, u16)>>,
     notify: tokio::sync::Notify,
+    /// What `has_queued_download_data` reports, settable per-test to drive
+    /// `store_received_data`'s immediate-ACK priority decision.
+    has_backlog: std::sync::atomic::AtomicBool,
 }
 
 impl PacketEnqueuer for MockEnqueuer {
@@ -32,6 +35,21 @@ impl PacketEnqueuer for MockEnqueuer {
         self.priorities.lock().unwrap().push((priority, packet_type, sequence_num));
         self.notify.notify_one();
         true
+    }
+
+    fn has_queued_download_data(&self) -> bool {
+        self.has_backlog.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl MockEnqueuer {
+    fn set_has_backlog(&self, v: bool) {
+        self.has_backlog.store(v, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Priority of the most recent push matching `packet_type`/`sn`.
+    fn priority_of(&self, packet_type: u8, sn: u16) -> Option<i32> {
+        self.priorities.lock().unwrap().iter().rev().find(|&&(_, pt, s)| pt == packet_type && s == sn).map(|&(p, _, _)| p)
     }
 }
 
@@ -433,4 +451,36 @@ async fn pending_reacks_are_bounded_and_cleared_on_close() {
 
     arq.close("test forced close", CloseOptions { force: true, ..Default::default() });
     assert!(arq.inner.lock().unwrap().pending_reacks.is_empty(), "pending_reacks not cleared on close");
+}
+
+/// `store_received_data` must demote the immediate ACK it queues for a
+/// freshly-stored packet to `crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY`
+/// (LOW) exactly when the enqueuer reports download data already queued
+/// (`has_queued_download_data`), and keep it at its normal CRITICAL priority
+/// otherwise - so a lone ACK never preempts a stream's own waiting download
+/// data, but still rides its own reply promptly when there is nothing to
+/// preempt.
+#[tokio::test]
+async fn immediate_ack_priority_follows_download_backlog_signal() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let cfg = Config { window_size: 300, ..Config::default() };
+    // Synchronous, like the FIFO test above: no need for the background loops.
+    let arq = crate::Arq::new(15, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), cfg);
+
+    enqueuer.set_has_backlog(false);
+    arq.process_received_data(0, b"no backlog");
+    assert_eq!(
+        enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0),
+        Some(enums::PACKET_PRIORITY_CRITICAL),
+        "with no download backlog the immediate ACK must stay CRITICAL"
+    );
+
+    enqueuer.set_has_backlog(true);
+    arq.process_received_data(1, b"backlogged");
+    assert_eq!(
+        enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 1),
+        Some(crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY),
+        "with download backlog the immediate ACK must be demoted below CRITICAL"
+    );
+    assert_eq!(crate::data::IMMEDIATE_ACK_COALESCE_PRIORITY, enums::PACKET_PRIORITY_LOW);
 }
