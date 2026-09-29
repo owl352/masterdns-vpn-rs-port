@@ -546,8 +546,20 @@ async fn retransmit_loop(arq: Arc<Arq>) {
         // the `has_pending` branch through `snd_buf`/`control_snd_buf`)
         // still emits it close to on time instead of up to a whole
         // `base_interval` late.
+        //
+        // Floored at 20ms, not driven all the way down to the front entry's
+        // exact due time: under sustained receive traffic a new entry lands
+        // in `pending_reacks` faster than old ones fall due, so the front's
+        // due time is almost always "very soon" and an unfloored clamp turns
+        // this into a near-busy-loop (observed up to ~1kHz per busy stream)
+        // for as long as the stream keeps receiving — real contention on
+        // `arq.inner` across every stream's `io_loop`/`write_loop` at
+        // higher concurrency (see the duplex-throughput regression this and
+        // `data::REACK_PRIORITY` together fix). 20ms is still a fraction of
+        // `REACK_DELAY` (150ms), so it does not meaningfully change how late
+        // a re-ACK can land relative to the client's RTO margin.
         if let Some(due) = arq.next_reack_due() {
-            let remaining = due.saturating_duration_since(std::time::Instant::now()).max(Duration::from_millis(1));
+            let remaining = due.saturating_duration_since(std::time::Instant::now()).max(Duration::from_millis(20));
             interval = interval.min(remaining);
         }
 

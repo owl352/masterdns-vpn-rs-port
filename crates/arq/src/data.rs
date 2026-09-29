@@ -37,6 +37,43 @@ pub(crate) const REACK_DELAY: Duration = Duration::from_millis(150);
 /// ever abandoned without its retransmit loop draining the queue.
 pub(crate) const REACK_QUEUE_CAP: usize = 4 * 65536;
 
+/// Queue priority used for the *delayed* re-ACK copy emitted by
+/// `emit_due_reacks` — deliberately `PACKET_PRIORITY_LOW`, not
+/// `default_packet_priority(PACKET_STREAM_DATA_ACK)` (which is
+/// `PACKET_PRIORITY_CRITICAL`, still used for the immediate ACK sent
+/// synchronously in `store_received_data`).
+///
+/// Root cause of the duplex-throughput regression this constant fixes: a DNS
+/// response carries at most one item pulled from a stream's own priority
+/// queue (`udpserver::postsession::dequeue_session_response`), so within one
+/// stream CRITICAL always beats the NORMAL priority `STREAM_DATA` uses. Under
+/// sustained receive traffic a stream's re-ACK FIFO is essentially always
+/// non-empty (a new entry lands every `REACK_DELAY` window's worth of
+/// arrivals), so at CRITICAL priority the re-ACK copy permanently outranks
+/// that same stream's own *outbound* STREAM_DATA — i.e. an upload keeps the
+/// download direction of a duplex stream starved for as long as the upload
+/// runs, not just for one packet. Measured on macOS: `socks-echo-multi` (8
+/// duplex SOCKS streams) went from ~1.2s to 70-90s with re-ACKs at CRITICAL.
+///
+/// LOW sits below `STREAM_DATA`'s NORMAL, so a stream's own pending outbound
+/// data is always chosen over a re-ACK copy when both are queued, restoring
+/// the download direction. It stays above `PACKET_PRIORITY_IDLE` (PING/PONG)
+/// so re-ACKs are not starved indefinitely by idle traffic, and — combined
+/// with widening `postsession::pack_control_blocks`'s opportunistic
+/// cross-stream draining to include this priority (see its `PACKET_PRIORITY_LOW`
+/// cap) — LOW-priority re-ACKs still batch efficiently into one
+/// PACKED_CONTROL_BLOCKS reply instead of needing one whole round-robin turn
+/// each. This only affects *scheduling* order on the server, not the wire:
+/// the packet is still the same STREAM_DATA_ACK type carrying the same
+/// sequence number: a plain unmodified Go client cannot tell the difference.
+/// The immediate ACK (CRITICAL, unchanged) still reaches the peer with its
+/// original low latency, so the corruption fix's effectiveness is unchanged:
+/// it only ever depended on the *delayed* copy arriving within the client's
+/// RTO window (hundreds of ms), and LOW priority still clears well inside
+/// that margin because a stream's own pending-send backlog is small (bounded
+/// by `loops::READ_AHEAD_DATA_PACKETS`).
+pub(crate) const REACK_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
+
 impl Arq {
     /// Handles inbound `STREAM_DATA`: stores it, queues its ACK and wakes the
     /// writer, all before returning. Go hands this to a separate rx goroutine;
@@ -222,7 +259,10 @@ impl Arq {
 
         for sn in due {
             self.enqueuer.push_tx_packet(
-                enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+                // Deliberately *not* `default_packet_priority` (CRITICAL):
+                // see the doc comment on `REACK_PRIORITY` for why the extra
+                // copy must never outrank a stream's own outbound STREAM_DATA.
+                REACK_PRIORITY,
                 enums::PACKET_STREAM_DATA_ACK,
                 sn,
                 0,

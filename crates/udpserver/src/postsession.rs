@@ -874,6 +874,17 @@ impl Server {
 
         let has_orphan = record.orphan_queue.fast_size() > 0;
 
+        // Scan cap for the opportunistic cross-stream/orphan draining below:
+        // normally CRITICAL..=HIGH (the priority of every packable control
+        // packet type) is enough, but `arq::data::REACK_PRIORITY`-tagged
+        // delayed re-ACK copies sit at LOW (below outbound STREAM_DATA's
+        // NORMAL, so they never preempt it — see that constant's doc comment)
+        // and still need to be reachable here, or they would only ever drain
+        // one at a time through their own stream's round-robin turn instead
+        // of batching into this reply like every other packable control
+        // packet does.
+        const PACKABLE_SCAN_MAX_PRIORITY: i32 = enums::PACKET_PRIORITY_LOW;
+
         // Returns true once the reply is full.
         let drain_orphans = |blocks: &mut i64, payload: &mut Vec<u8>| -> bool {
             if *blocks >= limit {
@@ -883,7 +894,8 @@ impl Server {
                 if record.orphan_queue.fast_size() == 0 {
                     return false;
                 }
-                let popped = record.orphan_queue.pop_any_if(2, |p: &vpnproto::Packet| vpnproto::is_packable_control_packet(p.packet_type, 0), |_| 0);
+                let popped =
+                    record.orphan_queue.pop_any_if(PACKABLE_SCAN_MAX_PRIORITY, |p: &vpnproto::Packet| vpnproto::is_packable_control_packet(p.packet_type, 0), |_| 0);
                 let Some(popped) = popped else { return false };
                 vpnproto::append_packed_control_block(payload, popped.packet_type, popped.stream_id, popped.sequence_num, popped.fragment_id, popped.total_fragments);
                 *blocks += 1;
@@ -898,7 +910,8 @@ impl Server {
                 if stream.fast_tx_queue_size() == 0 {
                     return false;
                 }
-                let popped = stream.pop_any_tx_packet(2, |p: &ServerStreamTxPacket| vpnproto::is_packable_control_packet(p.packet_type, p.payload.len()));
+                let popped =
+                    stream.pop_any_tx_packet(PACKABLE_SCAN_MAX_PRIORITY, |p: &ServerStreamTxPacket| vpnproto::is_packable_control_packet(p.packet_type, p.payload.len()));
                 let Some(popped) = popped else { return false };
                 stream.note_tx_packet_dequeued(&popped);
                 vpnproto::append_packed_control_block(payload, popped.packet_type, stream_id, popped.sequence_num, popped.fragment_id, popped.total_fragments);

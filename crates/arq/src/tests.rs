@@ -9,13 +9,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[derive(Default)]
 struct MockEnqueuer {
     pushed: Mutex<Vec<(u8, u16, Vec<u8>)>>,
+    /// Priority each push was made with, parallel to `pushed` (kept separate
+    /// so existing `(packet_type, sn, payload)` tuple patterns above don't
+    /// need to change).
+    priorities: Mutex<Vec<(i32, u8, u16)>>,
     notify: tokio::sync::Notify,
 }
 
 impl PacketEnqueuer for MockEnqueuer {
     fn push_tx_packet(
         &self,
-        _priority: i32,
+        priority: i32,
         packet_type: u8,
         sequence_num: u16,
         _fragment_id: u8,
@@ -25,6 +29,7 @@ impl PacketEnqueuer for MockEnqueuer {
         payload: &[u8],
     ) -> bool {
         self.pushed.lock().unwrap().push((packet_type, sequence_num, payload.to_vec()));
+        self.priorities.lock().unwrap().push((priority, packet_type, sequence_num));
         self.notify.notify_one();
         true
     }
@@ -327,6 +332,55 @@ async fn stored_data_gets_immediate_ack_and_one_delayed_reack() {
     assert_eq!(ack_pushes(&enqueuer, 0), 2, "expected exactly one delayed re-ACK");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(ack_pushes(&enqueuer, 0), 2, "re-ACK must not repeat");
+}
+
+/// Regression test for the duplex-throughput stall (`socks-echo-multi` /
+/// `load-streams` went from ~1.2-1.4s to 50-90s): a DNS response can only
+/// carry one item pulled from a stream's own priority queue
+/// (`udpserver::postsession::dequeue_session_response`), so if the delayed
+/// re-ACK copy shared the immediate ACK's CRITICAL priority it would
+/// permanently outrank that same stream's own outbound STREAM_DATA
+/// (NORMAL priority) for as long as the peer kept sending — i.e. it isn't
+/// enough for the *immediate* ACK to stay fast, the *delayed* copy
+/// specifically must never be able to preempt outbound data. Pin both halves
+/// of that invariant so a future change can't silently restore it:
+/// - the immediate ACK keeps the protocol's normal (CRITICAL) priority, and
+/// - the delayed re-ACK copy is strictly lower priority than outbound
+///   STREAM_DATA, so a stream's own pending send is always picked over it.
+#[tokio::test]
+async fn delayed_reack_is_lower_priority_than_outbound_data() {
+    let enqueuer = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(15, 1, enqueuer.clone(), 1500, Some(std::sync::Arc::new(SilentLogger)), Config::default());
+    arq.start();
+
+    arq.process_received_data(0, b"x");
+    tokio::time::sleep(crate::data::REACK_DELAY + Duration::from_millis(200)).await;
+    assert_eq!(ack_pushes(&enqueuer, 0), 2, "expected an immediate ACK and one delayed re-ACK");
+
+    let priorities: Vec<i32> = enqueuer
+        .priorities
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|&&(_, t, s)| t == enums::PACKET_STREAM_DATA_ACK && s == 0)
+        .map(|&(p, _, _)| p)
+        .collect();
+    assert_eq!(priorities.len(), 2, "expected exactly two ACK pushes for sn 0");
+    let immediate_priority = priorities[0];
+    let reack_priority = priorities[1];
+
+    assert_eq!(
+        immediate_priority,
+        enums::default_packet_priority(enums::PACKET_STREAM_DATA_ACK),
+        "immediate ACK priority must stay at the protocol default (kept fast on purpose)"
+    );
+    let data_priority = enums::default_packet_priority(enums::PACKET_STREAM_DATA);
+    assert!(
+        reack_priority > data_priority,
+        "delayed re-ACK priority ({reack_priority}) must be strictly lower priority (a larger number) \
+         than outbound STREAM_DATA ({data_priority}), or it starves a duplex stream's download direction \
+         for as long as the peer keeps sending"
+    );
 }
 
 /// Data the server drops without ever ACKing it (out of window / beyond peer
