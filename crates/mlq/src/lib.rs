@@ -128,6 +128,27 @@ impl<T> MultiLevelQueue<T> {
         None
     }
 
+    /// Prefer an eligible item only when the highest-priority front can be
+    /// bypassed. Selection and removal share one lock: essential control at
+    /// the front cannot be displaced by a concurrent fairness decision.
+    pub fn pop_prefer_if(&self, priorities: &[i32], preferred: impl Fn(&T) -> bool, may_bypass: impl Fn(&T) -> bool) -> Option<(T, i32)> {
+        let mut inner = self.inner.write().unwrap();
+        if inner.bitmask == 0 {
+            return None;
+        }
+        let level = inner.bitmask.trailing_zeros() as usize;
+        let front = inner.front_live(level)?;
+        let key = if may_bypass(&inner.items[&front].item) {
+            priorities.iter().filter(|&&p| (0..LEVELS as i32).contains(&p))
+                .find_map(|&p| inner.find_live(p as usize, &preferred)).unwrap_or(front)
+        } else {
+            front
+        };
+        let (item, level) = inner.take(key)?;
+        self.fast_size.fetch_sub(1, Ordering::Relaxed);
+        Some((item, level as i32))
+    }
+
     pub fn peek_cloned(&self) -> Option<(T, i32)>
     where
         T: Clone,
@@ -416,4 +437,20 @@ mod tests {
         assert_eq!(q.pop(), Some((0, 2)));
         assert_eq!(q.pop(), None);
     }
+
+    #[test]
+    fn fairness_selection_is_atomic_and_preserves_essential_front() {
+        let q = MultiLevelQueue::new(8);
+        assert!(q.push(0, 1, "reset"));
+        assert!(q.push(0, 2, "ack"));
+        assert!(q.push(3, 3, "data"));
+        let preferred = |v: &&str| *v == "data";
+        let bypassable = |v: &&str| *v == "ack";
+        assert_eq!(q.pop_prefer_if(&[3], preferred, bypassable), Some(("reset", 0)));
+        assert_eq!(q.pop_prefer_if(&[3], preferred, bypassable), Some(("data", 3)));
+        assert_eq!(q.fast_size(), 1);
+        assert_eq!(q.pop(), Some(("ack", 0)));
+        assert_eq!(q.pop_prefer_if(&[-1, 6], preferred, bypassable), None);
+    }
+
 }

@@ -1,6 +1,6 @@
 //! Port of `internal/udpserver/stream_server.go`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,6 @@ pub struct ServerStreamTxPacket {
     pub total_fragments: u8,
     pub compression_type: u8,
     pub payload: Vec<u8>,
-    #[allow(dead_code)]
     pub created_at: Instant,
     pub ttl: Duration,
 }
@@ -28,6 +27,8 @@ pub struct StreamServer {
     pub session_id: u8,
     arq: OnceLock<Arc<arq::Arq>>,
     tx_queue: mlq::MultiLevelQueue<ServerStreamTxPacket>,
+    control_streak: AtomicUsize,
+    data_streak: AtomicUsize,
 
     state: Mutex<StreamState>,
     pub connected: AtomicBool,
@@ -65,6 +66,8 @@ impl StreamServer {
             session_id,
             arq: OnceLock::new(),
             tx_queue: mlq::MultiLevelQueue::new(queue_cap),
+            control_streak: AtomicUsize::new(0),
+            data_streak: AtomicUsize::new(0),
             state: Mutex::new(StreamState {
                 status: "PENDING".to_string(),
                 created_at: now,
@@ -157,7 +160,36 @@ impl StreamServer {
     }
 
     pub fn pop_next_tx_packet(&self) -> Option<(ServerStreamTxPacket, i32)> {
-        self.tx_queue.pop()
+        let bypassable = |p: &ServerStreamTxPacket| {
+            matches!(
+                p.packet_type,
+                enums::PACKET_STREAM_DATA_ACK | enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND
+            )
+        };
+        let popped = if self.control_streak.load(Ordering::Relaxed) >= 4 {
+            self.tx_queue.pop_prefer_if(&[enums::PACKET_PRIORITY_NORMAL], |p| p.packet_type == enums::PACKET_STREAM_DATA, bypassable)
+        } else if self.data_streak.load(Ordering::Relaxed) >= 16 {
+            self.tx_queue.pop_prefer_if(
+                &[enums::PACKET_PRIORITY_CRITICAL, enums::PACKET_PRIORITY_LOW],
+                |p| p.packet_type == enums::PACKET_STREAM_DATA_ACK && p.created_at.elapsed() >= Duration::from_millis(100),
+                bypassable,
+            )
+        } else {
+            self.tx_queue.pop()
+        };
+        if let Some((p, _)) = &popped {
+            if p.packet_type == enums::PACKET_STREAM_DATA {
+                self.control_streak.store(0, Ordering::Relaxed);
+            } else {
+                self.control_streak.fetch_add(1, Ordering::Relaxed);
+            }
+            if matches!(p.packet_type, enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND) {
+                self.data_streak.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.data_streak.store(0, Ordering::Relaxed);
+            }
+        }
+        popped
     }
 
     pub fn pop_any_tx_packet(&self, max_priority: i32, predicate: impl Fn(&ServerStreamTxPacket) -> bool) -> Option<ServerStreamTxPacket> {
@@ -288,5 +320,73 @@ impl arq::PacketEnqueuer for StreamServer {
 
     fn has_queued_download_data(&self) -> bool {
         self.tx_queue.count(enums::PACKET_PRIORITY_NORMAL) > 0
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+    use arq::PacketEnqueuer;
+
+    fn queue(stream: &StreamServer, kind: u8, sn: u16) {
+        assert!(stream.push_tx_packet(enums::default_packet_priority(kind), kind, sn, 0, 0, 0, Duration::ZERO, &[]));
+    }
+
+    #[tokio::test]
+    async fn ack_and_recovery_backlog_cannot_starve_new_data() {
+        for kind in [enums::PACKET_STREAM_DATA_ACK, enums::PACKET_STREAM_RESEND] {
+            let stream = StreamServer::new(1, 1, arq::Config::default(), 1000, 64, Arc::new(arq::DummyLogger));
+            for sn in 1..20 {
+                queue(&stream, kind, sn);
+            }
+            queue(&stream, enums::PACKET_STREAM_DATA, 50);
+            for _ in 0..4 {
+                assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, kind);
+            }
+            assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, enums::PACKET_STREAM_DATA);
+            stream.arq().unwrap().close("test", arq::CloseOptions::default());
+        }
+    }
+
+    #[tokio::test]
+    async fn fairness_does_not_bypass_close_or_reset() {
+        let stream = StreamServer::new(1, 1, arq::Config::default(), 1000, 64, Arc::new(arq::DummyLogger));
+        for sn in 1..5 {
+            queue(&stream, enums::PACKET_STREAM_DATA_ACK, sn);
+        }
+        for _ in 0..4 {
+            stream.pop_next_tx_packet().unwrap();
+        }
+        queue(&stream, enums::PACKET_STREAM_DATA, 50);
+        queue(&stream, enums::PACKET_STREAM_RST, 60);
+        assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, enums::PACKET_STREAM_RST);
+        stream.arq().unwrap().close("test", arq::CloseOptions::default());
+    }
+
+    #[tokio::test]
+    async fn aged_reack_gets_a_slot_under_continuous_data() {
+        let stream = StreamServer::new(1, 1, arq::Config::default(), 1000, 64, Arc::new(arq::DummyLogger));
+        for sn in 0..20 {
+            queue(&stream, enums::PACKET_STREAM_DATA, sn);
+        }
+        assert!(stream.tx_queue.push(
+            enums::PACKET_PRIORITY_LOW,
+            999,
+            ServerStreamTxPacket {
+                packet_type: enums::PACKET_STREAM_DATA_ACK,
+                sequence_num: 90,
+                fragment_id: 0,
+                total_fragments: 0,
+                compression_type: 0,
+                payload: Vec::new(),
+                created_at: Instant::now() - Duration::from_millis(101),
+                ttl: Duration::ZERO,
+            }
+        ));
+        for _ in 0..16 {
+            assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, enums::PACKET_STREAM_DATA);
+        }
+        assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, enums::PACKET_STREAM_DATA_ACK);
+        stream.arq().unwrap().close("test", arq::CloseOptions::default());
     }
 }
