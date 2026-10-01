@@ -984,3 +984,21 @@ async fn stalled_shutdown_is_cancellable_and_does_not_restore_closed_writer() {
     assert!(arq.local_conn_write.lock().unwrap().is_none());
     assert!(!arq.inner.lock().unwrap().local_write_closed, "cancelled shutdown is not successful shutdown");
 }
+
+#[test]
+fn unreachable_peer_exhausts_data_recovery_then_closes_reset_wait() {
+    use std::time::Instant;
+    let (arq, _) = recovery_fixture(0, Duration::from_secs(121), 1);
+    arq.inner.lock().unwrap().snd_buf.get_mut(&0).unwrap().retries = arq.max_data_retries;
+    arq.check_retransmits();
+    {
+        let mut s = arq.inner.lock().unwrap();
+        assert!(s.rst_sent);
+        assert!(s.snd_buf.is_empty());
+        assert_eq!(s.queued_data, 0);
+        s.ack_wait_deadline = Some(Instant::now() - Duration::from_secs(1));
+    }
+    arq.check_retransmits();
+    assert!(arq.is_closed(), "a permanently unreachable peer must not keep reset wait alive indefinitely");
+    assert!(arq.cancel_token.is_cancelled());
+}
