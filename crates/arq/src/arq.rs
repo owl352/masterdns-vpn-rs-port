@@ -392,26 +392,32 @@ impl Arq {
 
     /// Half-closes the local writer side of the application connection.
     pub(crate) async fn half_close_local_writer(&self) {
-        {
-            let mut s = self.inner.lock().unwrap();
-            if s.local_write_closed || s.closed {
-                return;
-            }
-            s.local_write_closed = true;
-        }
-
-        // Take the writer out so we never hold the (non-async) mutex across
-        // an `.await`; `loops::write_loop` uses the same take-out/put-back
-        // pattern, so this races harmlessly with it at worst (one side finds
-        // `None` and skips).
+        // Obtain ownership before consuming the request. A writer checked out
+        // by write_loop is not shut down yet; its next drain check retries.
         let taken = self.local_conn_write.lock().unwrap().take();
-        if let Some(mut conn) = taken {
+        let Some(mut conn) = taken else { return; };
+        let should_shutdown = {
+            let s = self.inner.lock().unwrap();
+            !s.local_write_closed && !s.closed
+        };
+        if should_shutdown {
             use tokio::io::AsyncWriteExt;
-            let _ = conn.shutdown().await;
-            let mut guard = self.local_conn_write.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(conn);
+            let result = tokio::select! {
+                _ = self.cancel_token.cancelled() => return,
+                result = tokio::time::timeout(Duration::from_secs(3), conn.shutdown()) => result,
+            };
+            match result {
+                Ok(Ok(())) => self.inner.lock().unwrap().local_write_closed = true,
+                _ => {
+                    self.mark_local_writer_broken("local writer shutdown failed or timed out");
+                    self.close("local writer shutdown failed or timed out", CloseOptions { send_rst: true, ..Default::default() });
+                    return;
+                }
             }
+        }
+        let mut guard = self.local_conn_write.lock().unwrap();
+        if guard.is_none() && !self.is_closed() {
+            *guard = Some(conn);
         }
     }
 
@@ -504,6 +510,7 @@ impl Arq {
                 || (s.local_writer_broken && (s.close_write_acked || s.close_write_received));
             !s.closed
                 && s.close_read_received
+                && s.snd_buf.is_empty()
                 && receive_drained
                 && (!s.local_write_pending || s.local_writer_broken)
                 && (s.close_read_acked || (s.close_read_sent && !waiting_for_close_read_ack))

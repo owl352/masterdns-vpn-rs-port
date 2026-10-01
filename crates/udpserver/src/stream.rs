@@ -313,6 +313,11 @@ impl arq::PacketEnqueuer for StreamServer {
         removed_any
     }
 
+    fn remove_queued_control(&self, packet_type: u8, sequence_num: u16, fragment_id: u8) -> bool {
+        let key = enums::packet_identity_key(self.id, packet_type, sequence_num, fragment_id);
+        self.tx_queue.remove_by_key(key).is_some()
+    }
+
     fn remove_queued_data_nack(&self, sequence_num: u16) -> bool {
         let key = enums::packet_identity_key(self.id, enums::PACKET_STREAM_DATA_NACK, sequence_num, 0);
         self.tx_queue.remove_by_key(key).is_some()

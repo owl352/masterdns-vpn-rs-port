@@ -639,8 +639,14 @@ impl Arq {
             return Vec::new();
         }
 
-        let max_gap = data_nack_max_gap as u16;
-        let mut missing_seqs = Vec::with_capacity(data_nack_max_gap);
+        let highest_received = state.rcv_buf.keys().filter_map(|sn| {
+            let distance = sn.wrapping_sub(state.rcv_nxt);
+            (distance < 32768).then_some(distance as usize)
+        }).max().unwrap_or(0);
+        // Only holes preceding observed data are evidence of loss. Requesting
+        // future, unobserved sequences manufactures unnecessary retransmits.
+        let max_gap = data_nack_max_gap.min(highest_received).min(crate::MAX_WINDOW_SIZE) as u16;
+        let mut missing_seqs = Vec::with_capacity(max_gap as usize);
         let mut candidate = state.rcv_nxt;
         loop {
             if candidate.wrapping_sub(state.rcv_nxt) >= max_gap {
@@ -659,19 +665,19 @@ impl Arq {
             return;
         }
 
-        let (closed, last_activity, missing_seqs, rcv_nxt) = {
+        let (closed, missing_seqs, rcv_nxt) = {
             let s = self.inner.lock().unwrap();
             let missing = Self::gap_recovery_candidates_locked(&s, self.data_nack_max_gap);
-            (s.closed, s.last_activity, missing, s.rcv_nxt)
+            (s.closed, missing, s.rcv_nxt)
         };
 
         if closed || missing_seqs.is_empty() {
             return;
         }
 
-        if now.duration_since(last_activity) < self.data_nack_repeat_interval {
-            return;
-        }
+        // An unresolved receive hole is independent of unrelated ACKs or
+        // control activity. Per-hole initial delay and repeat cooldown below
+        // already bound recovery without requiring the entire stream to idle.
 
         {
             let mut s = self.inner.lock().unwrap();

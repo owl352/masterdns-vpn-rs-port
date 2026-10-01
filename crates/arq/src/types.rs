@@ -41,6 +41,10 @@ pub trait PacketEnqueuer: Send + Sync {
     fn remove_queued_data(&self, _sequence_num: u16) -> bool {
         false
     }
+    /// Optional: retire a tracked control packet after its ACK or a stale enqueue.
+    fn remove_queued_control(&self, _packet_type: u8, _sequence_num: u16, _fragment_id: u8) -> bool {
+        false
+    }
     /// Optional: remove a previously queued DATA_NACK by sequence number.
     fn remove_queued_data_nack(&self, _sequence_num: u16) -> bool {
         false

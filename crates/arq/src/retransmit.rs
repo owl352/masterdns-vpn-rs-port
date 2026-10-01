@@ -334,7 +334,7 @@ impl Arq {
 
     fn check_control_retransmits(&self, now: Instant) {
         let mut expired: Option<(u8, &'static str)> = None;
-        let mut retries: Vec<(u32, u8, u16, u8, u8, i32, Vec<u8>, Duration)> = Vec::new();
+        let mut retries = Vec::new();
 
         {
             let mut s = self.inner.lock().unwrap();
@@ -384,16 +384,7 @@ impl Arq {
                     continue;
                 }
 
-                retries.push((
-                    key,
-                    info.packet_type,
-                    info.sequence_num,
-                    info.fragment_id,
-                    info.total_fragments,
-                    info.priority,
-                    info.payload.clone(),
-                    info.ttl,
-                ));
+                retries.push((key, info.clone()));
             }
         }
 
@@ -402,31 +393,36 @@ impl Arq {
             return;
         }
 
-        for (key, packet_type, sequence_num, fragment_id, total_fragments, priority, payload, ttl) in retries {
-            let ok = self.enqueuer.push_tx_packet(priority, packet_type, sequence_num, fragment_id, total_fragments, 0, ttl, &payload);
-            if !ok {
-                continue;
+        for (key, previous) in retries {
+            {
+                let mut s = self.inner.lock().unwrap();
+                if s.closed { return; }
+                let mut floor = self.current_control_base_rto(&s);
+                let Some(item) = s.control_snd_buf.get_mut(&key) else { continue; };
+                if !item.dispatched || item.last_sent_at != previous.last_sent_at || item.created_at != previous.created_at {
+                    continue;
+                }
+                let growth = if is_setup_control_packet(item.packet_type) {
+                    floor = floor.min(Duration::from_millis(350));
+                    SETUP_CONTROL_RTO_GROWTH_FACTOR
+                } else { CONTROL_RETRANSMIT_RTO_GROWTH_FACTOR };
+                item.dispatched = false;
+                item.retries += 1;
+                item.sample_eligible = false;
+                item.current_rto = clamp_duration(grow_duration(item.current_rto, growth), floor, self.control_max_rto);
             }
-
-            let mut s = self.inner.lock().unwrap();
-            let mut floor_rto = self.current_control_base_rto(&s);
-            if let Some(info) = s.control_snd_buf.get_mut(&key) {
-                info.last_sent_at = Some(now);
-                info.dispatched = false;
-                info.retries += 1;
-                info.sample_eligible = false;
-                let mut growth = CONTROL_RETRANSMIT_RTO_GROWTH_FACTOR;
-
-                if is_setup_control_packet(packet_type) {
-                    growth = SETUP_CONTROL_RTO_GROWTH_FACTOR;
-                    let alt_floor = Duration::from_millis(350);
-                    if alt_floor < floor_rto {
-                        floor_rto = alt_floor;
+            let ok = self.enqueuer.push_tx_packet(previous.priority, previous.packet_type, previous.sequence_num,
+                previous.fragment_id, previous.total_fragments, 0, previous.ttl, &previous.payload);
+            if !ok {
+                let mut s = self.inner.lock().unwrap();
+                if let Some(item) = s.control_snd_buf.get_mut(&key) {
+                    if item.created_at == previous.created_at && !item.dispatched && item.retries == previous.retries + 1 {
+                        *item = previous.clone();
                     }
                 }
-
-                let grown_rto = grow_duration(info.current_rto, growth);
-                info.current_rto = clamp_duration(grown_rto, floor_rto, self.control_max_rto);
+            }
+            if !self.inner.lock().unwrap().control_snd_buf.contains_key(&key) {
+                self.enqueuer.remove_queued_control(previous.packet_type, previous.sequence_num, previous.fragment_id);
             }
         }
     }

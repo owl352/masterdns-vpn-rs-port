@@ -50,12 +50,6 @@ impl Arq {
             }
         }
 
-        let ok = self
-            .enqueuer
-            .push_tx_packet(priority, packet_type, sequence_num, fragment_id, total_fragments, 0, ttl, &copy_data);
-
-        let (dispatched_flag, last_sent_at) = if !ok { (true, now.checked_sub(initial_rto)) } else { (false, None) };
-
         s.control_snd_buf.insert(
             key,
             ControlItem {
@@ -67,8 +61,8 @@ impl Arq {
                 payload: copy_data,
                 priority,
                 created_at: now,
-                last_sent_at,
-                dispatched: dispatched_flag,
+                last_sent_at: None,
+                dispatched: false,
                 retries: 0,
                 current_rto: initial_rto,
                 sample_eligible: true,
@@ -76,6 +70,21 @@ impl Arq {
             },
         );
 
+        drop(s);
+        let ok = self.enqueuer.push_tx_packet(priority, packet_type, sequence_num, fragment_id, total_fragments, 0, ttl, payload);
+        if !ok {
+            let mut s = self.inner.lock().unwrap();
+            if let Some(item) = s.control_snd_buf.get_mut(&key) {
+                if item.created_at == now && !item.dispatched {
+                    item.dispatched = true;
+                    item.last_sent_at = now.checked_sub(initial_rto);
+                    item.sample_eligible = false;
+                }
+            }
+        }
+        if !self.inner.lock().unwrap().control_snd_buf.contains_key(&key) {
+            self.enqueuer.remove_queued_control(packet_type, sequence_num, fragment_id);
+        }
         ok
     }
 
@@ -212,6 +221,9 @@ impl Arq {
             }
         }
 
+        if tracked {
+            self.enqueuer.remove_queued_control(origin_ptype, sequence_num, fragment_id);
+        }
         if tracked && sample_eligible {
             self.note_successful_control_sample(sample);
         }

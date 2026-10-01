@@ -747,3 +747,240 @@ fn packets_created_before_rtt_sample_benefit_from_learned_timeout() {
     drop(s);
     assert_eq!(arq.next_data_retry_due(), Some(sent + Duration::from_secs(2)));
 }
+
+#[test]
+fn receive_hole_recovers_despite_continuous_unrelated_activity() {
+    use std::time::Instant;
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(90, 1, mock.clone(), 1000, None, Config {
+        data_nack_max_gap: 4, data_nack_initial_delay_seconds: 0.05,
+        data_nack_repeat_seconds: 0.1, ..Config::default()
+    });
+    arq.receive_data(1, b"later");
+    let now = Instant::now();
+    arq.run_gap_recovery_watchdog(now);
+    arq.inner.lock().unwrap().last_activity = now + Duration::from_millis(100);
+    arq.run_gap_recovery_watchdog(now + Duration::from_millis(100));
+    assert!(mock.pushed.lock().unwrap().iter().any(|(pt, sn, _)|
+        *pt == enums::PACKET_STREAM_DATA_NACK && *sn == 0));
+}
+
+#[tokio::test]
+async fn eof_does_not_shutdown_writer_before_receive_hole_is_filled() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(91, 1, mock, 1000, None, Config::default());
+    let (mut app, conn) = tokio::io::duplex(4096);
+    arq.set_local_conn(conn);
+    arq.receive_data(1, b"world");
+    arq.inner.lock().unwrap().close_read_received = true;
+    arq.start();
+    arq.signal_flush_ready();
+    let mut bytes = [0; 10];
+    assert!(tokio::time::timeout(Duration::from_millis(30), app.read(&mut bytes)).await.is_err(),
+        "EOF must wait for buffered data behind a receive hole");
+    arq.receive_data(0, b"hello");
+    tokio::time::timeout(Duration::from_secs(1), app.read_exact(&mut bytes)).await.unwrap().unwrap();
+    assert_eq!(&bytes, b"helloworld");
+    let mut byte = [0];
+    assert_eq!(tokio::time::timeout(Duration::from_secs(1), app.read(&mut byte)).await.unwrap().unwrap(), 0);
+    arq.close("test", CloseOptions::default());
+}
+
+#[tokio::test]
+async fn checked_out_writer_does_not_consume_shutdown_request() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(92, 1, mock, 1000, None, Config::default());
+    let (mut app, conn) = tokio::io::duplex(4096);
+    arq.set_local_conn(conn);
+    let writer = arq.local_conn_write.lock().unwrap().take().unwrap();
+    arq.half_close_local_writer().await;
+    assert!(!arq.inner.lock().unwrap().local_write_closed,
+        "writer ownership contention is not a completed shutdown");
+    *arq.local_conn_write.lock().unwrap() = Some(writer);
+    arq.half_close_local_writer().await;
+    let mut byte = [0];
+    assert_eq!(tokio::time::timeout(Duration::from_secs(1), app.read(&mut byte)).await.unwrap().unwrap(), 0);
+    arq.close("test", CloseOptions::default());
+}
+
+#[test]
+fn control_retry_does_not_overwrite_concurrent_dequeue() {
+    use std::time::Instant;
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(93, 1, mock.clone(), 1000, None, Config { enable_control_reliability: true, ..Config::default() });
+    let kind = enums::PACKET_STREAM_CONNECTED;
+    arq.send_control_packet_with_ttl(kind, 0, 0, 0, &[], 0, true, None, Duration::ZERO);
+    arq.note_tx_packet_dequeued(kind, 0, 0);
+    let key = crate::arq::control_key(kind, 0, 0);
+    arq.inner.lock().unwrap().control_snd_buf.get_mut(&key).unwrap().last_sent_at = Some(Instant::now() - Duration::from_secs(10));
+    let a = arq.clone();
+    *mock.on_push.lock().unwrap() = Some(Box::new(move || { a.note_tx_packet_dequeued(kind, 0, 0); }));
+    arq.check_retransmits();
+    let s = arq.inner.lock().unwrap();
+    assert!(s.control_snd_buf[&key].dispatched, "retry enqueue cannot undo actual dispatch");
+    assert!(!s.control_snd_buf[&key].sample_eligible);
+}
+
+#[test]
+fn initial_control_enqueue_allows_synchronous_dequeue_without_relocking() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(94, 1, mock.clone(), 1000, None, Config { enable_control_reliability: true, ..Config::default() });
+    let kind = enums::PACKET_STREAM_CONNECTED;
+    let a = arq.clone();
+    *mock.on_push.lock().unwrap() = Some(Box::new(move || { a.note_tx_packet_dequeued(kind, 0, 0); }));
+    assert!(arq.send_control_packet_with_ttl(kind, 0, 0, 0, &[], 0, true, None, Duration::ZERO));
+    let key = crate::arq::control_key(kind, 0, 0);
+    assert!(arq.inner.lock().unwrap().control_snd_buf[&key].dispatched);
+}
+
+#[test]
+fn failed_control_retry_restores_reservation_and_ack_race_does_not_resurrect_it() {
+    use std::time::Instant;
+    for ack in [false, true] {
+        let mock = std::sync::Arc::new(MockEnqueuer::default());
+        let arq = crate::Arq::new(95, 1, mock.clone(), 1000, None, Config { enable_control_reliability: true, ..Config::default() });
+        let kind = enums::PACKET_STREAM_CONNECTED;
+        arq.send_control_packet_with_ttl(kind, 0, 0, 0, &[], 0, true, None, Duration::ZERO);
+        arq.note_tx_packet_dequeued(kind, 0, 0);
+        let key = crate::arq::control_key(kind, 0, 0);
+        arq.inner.lock().unwrap().control_snd_buf.get_mut(&key).unwrap().last_sent_at = Some(Instant::now() - Duration::from_secs(10));
+        if ack {
+            let a = arq.clone();
+            *mock.on_push.lock().unwrap() = Some(Box::new(move || { assert!(a.receive_control_ack(enums::control_ack_for(kind).unwrap(), 0, 0)); }));
+        } else { mock.reject.store(true, std::sync::atomic::Ordering::SeqCst); }
+        arq.check_retransmits();
+        let s = arq.inner.lock().unwrap();
+        if ack { assert!(!s.control_snd_buf.contains_key(&key)); }
+        else { assert_eq!(s.control_snd_buf[&key].retries, 0); assert!(s.control_snd_buf[&key].dispatched); }
+    }
+}
+
+#[test]
+fn remote_eof_cannot_finalize_with_unacknowledged_outbound_data() {
+    let (arq, _) = recovery_fixture(0, Duration::from_millis(10), 1);
+    {
+        let mut s = arq.inner.lock().unwrap();
+        s.close_read_received = true;
+        s.close_read_sent = true;
+        s.close_read_acked = true;
+    }
+    arq.try_finalize_remote_eof();
+    assert!(!arq.is_closed(), "EOF completion cannot clear still-unacknowledged data");
+    assert!(arq.has_pending_sequence(0));
+}
+
+#[tokio::test]
+async fn intermittent_writer_backpressure_does_not_accumulate_failure_budget() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(96, 1, mock, 1000, None, Config::default());
+    let (mut app, conn) = tokio::io::duplex(1);
+    arq.set_local_conn(conn);
+    arq.start();
+    assert!(arq.receive_data(0, b"abcd"));
+    let mut got = Vec::new();
+    for _ in 0..4 {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let mut byte = [0];
+        let n = tokio::time::timeout(Duration::from_secs(1), app.read(&mut byte)).await.unwrap().unwrap();
+        assert_eq!(n, 1, "progress between timeouts must reset the consecutive-failure budget");
+        got.push(byte[0]);
+    }
+    assert_eq!(got, b"abcd");
+    assert!(!arq.inner.lock().unwrap().local_writer_broken);
+    arq.close("test", CloseOptions::default());
+}
+
+#[tokio::test]
+async fn ordered_receive_survives_two_full_sequence_wraps_and_duplicate_packets() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(97, 1, mock, 1000, None, Config::default());
+    let (mut app, conn) = tokio::io::duplex(1 << 20);
+    arq.set_local_conn(conn);
+    arq.start();
+    let count = 2 * 65536 + 100;
+    let reader = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), app.read_to_end(&mut bytes)).await.unwrap().unwrap();
+        bytes
+    });
+    for i in 0..count {
+        let data = (i as u32).to_le_bytes();
+        assert!(arq.receive_data(i as u16, &data));
+        if i % 31 == 0 { assert!(arq.receive_data(i as u16, &data)); }
+        if i % 128 == 127 { tokio::task::yield_now().await; }
+    }
+    arq.mark_close_read_received();
+    let bytes = reader.await.unwrap();
+    assert_eq!(bytes.len(), count * 4);
+    for (i, bytes) in bytes.chunks_exact(4).enumerate() { assert_eq!(bytes, (i as u32).to_le_bytes()); }
+    arq.close("test", CloseOptions::default());
+}
+
+#[test]
+fn gap_watchdog_never_requests_sequences_beyond_received_data() {
+    use std::time::Instant;
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(98, 1, mock.clone(), 1000, None, Config {
+        data_nack_max_gap: 8, data_nack_initial_delay_seconds: 0.0, ..Config::default()
+    });
+    arq.receive_data(1, b"later");
+    mock.pushed.lock().unwrap().clear();
+    arq.run_gap_recovery_watchdog(Instant::now() + Duration::from_secs(1));
+    let pushed = mock.pushed.lock().unwrap();
+    let requested: Vec<_> = pushed.iter().filter(|(pt, _, _)| *pt == enums::PACKET_STREAM_DATA_NACK).map(|(_, sn, _)| *sn).collect();
+    assert_eq!(requested, vec![0]);
+}
+
+#[test]
+fn gap_recovery_wraps_and_failed_enqueue_does_not_start_cooldown() {
+    use std::time::Instant;
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(99, 1, mock.clone(), 1000, None, Config {
+        data_nack_max_gap: 8, data_nack_initial_delay_seconds: 0.0,
+        data_nack_repeat_seconds: 0.1, ..Config::default()
+    });
+    {
+        let mut s = arq.inner.lock().unwrap();
+        s.rcv_nxt = 65534;
+        s.rcv_highest = 65534;
+    }
+    mock.reject.store(true, std::sync::atomic::Ordering::SeqCst);
+    arq.receive_data(0, b"later");
+    assert!(arq.inner.lock().unwrap().last_data_nack_sent.is_empty());
+    mock.reject.store(false, std::sync::atomic::Ordering::SeqCst);
+    let now = Instant::now();
+    arq.run_gap_recovery_watchdog(now);
+    let pushed = mock.pushed.lock().unwrap();
+    let requested: Vec<_> = pushed.iter().filter(|(pt, _, _)| *pt == enums::PACKET_STREAM_DATA_NACK).map(|(_, sn, _)| *sn).collect();
+    assert_eq!(requested, vec![65534, 65535]);
+    drop(pushed);
+    let count = mock.pushed.lock().unwrap().len();
+    arq.run_gap_recovery_watchdog(now + Duration::from_millis(10));
+    assert_eq!(mock.pushed.lock().unwrap().len(), count);
+}
+
+struct StuckShutdown;
+impl tokio::io::AsyncWrite for StuckShutdown {
+    fn poll_write(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>, bytes: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn stalled_shutdown_is_cancellable_and_does_not_restore_closed_writer() {
+    let arq = crate::Arq::new(100, 1, std::sync::Arc::new(MockEnqueuer::default()), 1000, None, Config::default());
+    *arq.local_conn_write.lock().unwrap() = Some(Box::new(StuckShutdown));
+    let a = arq.clone();
+    let task = tokio::spawn(async move { a.half_close_local_writer().await; });
+    tokio::task::yield_now().await;
+    arq.close("test cancellation", CloseOptions::default());
+    tokio::time::timeout(Duration::from_millis(100), task).await.unwrap().unwrap();
+    assert!(arq.local_conn_write.lock().unwrap().is_none());
+    assert!(!arq.inner.lock().unwrap().local_write_closed, "cancelled shutdown is not successful shutdown");
+}

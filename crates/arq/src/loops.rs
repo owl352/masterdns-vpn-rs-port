@@ -410,11 +410,11 @@ async fn write_loop(arq: Arc<Arq>) {
             }
 
             if to_write.is_empty() {
-                let (cr, rst_received, pending_inbound) = {
+                let (cr, rst_received, receive_drained) = {
                     let s = arq.inner.lock().unwrap();
-                    (s.close_read_received, s.rst_received, s.pending_inbound)
+                    (s.close_read_received, s.rst_received, s.pending_inbound == 0 && s.rcv_buf.is_empty())
                 };
-                if cr && pending_inbound == 0 {
+                if cr && receive_drained {
                     arq.half_close_local_writer().await;
                 }
                 if rst_received && arq.try_finalize_peer_reset_drain() {
@@ -455,7 +455,12 @@ async fn write_loop(arq: Arc<Arq>) {
                             break;
                         }
                     }
-                    Ok(Ok(n)) => remaining = &remaining[n..],
+                    Ok(Ok(n)) => {
+                        remaining = &remaining[n..];
+                        // The budget limits consecutive failures, not the
+                        // total number of pauses during a progressing write.
+                        transient_retries = 0;
+                    }
                     Ok(Err(e)) => match classify_io_error(&e) {
                         IoErrorClass::Timeout | IoErrorClass::Transient => {
                             if !bump_transient_write_retry(&arq, &mut transient_retries) {
