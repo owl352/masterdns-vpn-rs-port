@@ -394,4 +394,20 @@ mod scheduling_tests {
         assert_eq!(stream.pop_next_tx_packet().unwrap().0.packet_type, enums::PACKET_STREAM_DATA_ACK);
         stream.arq().unwrap().close("test", arq::CloseOptions::default());
     }
+
+    #[tokio::test]
+    async fn acked_control_retry_is_removed_from_stream_queue() {
+        let stream = StreamServer::new(1, 1, arq::Config { enable_control_reliability: true, ..Default::default() },
+            1000, 64, Arc::new(arq::DummyLogger));
+        let arq = stream.arq().unwrap();
+        let kind = enums::PACKET_STREAM_CONNECTED;
+        assert!(arq.send_control_packet_with_ttl(kind, 0, 0, 0, &[], 0, true, None, Duration::ZERO));
+        assert_eq!(stream.fast_tx_queue_size(), 1);
+        arq.note_tx_packet_dequeued(kind, 0, 0);
+        // Model a late ACK of an earlier copy while this retry is still queued.
+        assert!(arq.receive_control_ack(enums::control_ack_for(kind).unwrap(), 0, 0));
+        assert_eq!(stream.fast_tx_queue_size(), 0);
+        arq.close("test", arq::CloseOptions::default());
+    }
+
 }

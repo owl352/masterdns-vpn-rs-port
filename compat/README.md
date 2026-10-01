@@ -82,6 +82,38 @@ packet order mean it does not produce an identical loss trace across runs.
 `-path-jitter` adds a uniformly distributed extra delay to each direction;
 it approximates mixed path delays, not several independently balanced resolvers.
 
+## Stall recovery stress gate
+
+The ordinary `all` selector remains the nine routine scenarios. Use `stress`
+for the expensive regression cases, or select them individually:
+
+```sh
+/tmp/interop -server-bin <server> -client-bin <unchanged-go-client> \
+  -scenarios stress-duplex,stress-upload-eof -repeat 15 -timeout 90 \
+  -work /tmp/stall-stress -json /tmp/stall-stress.json
+/tmp/interop -server-bin <server> -client-bin <unchanged-go-client> \
+  -scenarios stress-download -repeat 3 -timeout 90
+```
+
+- `stress-duplex`: eight simultaneous SOCKS streams, 8 MiB per direction per
+  stream, including upload half-close.
+- `stress-upload-eof`: 40 MiB upload verified at the upstream target, including
+  delivery of EOF.
+- `stress-download`: 256 MiB download, verified independently.
+
+Duplex JSON includes `stream_progress`: delivered bytes and longest delivery
+pause per stream, retaining partial progress on failure. The final read wait
+is included, so a stalled stream's timeout is visible rather than hidden by
+successful activity on other streams. These gaps include setup and are not
+pure ARQ RTT measurements.
+
+For a local diagnostic run only, `MASTERDNS_STALL_DIAGNOSTICS=1` enables
+metadata snapshots every two seconds per stream. They contain sequence/buffer
+counts, retry state and close/write flags, never payloads or keys. Diagnostics
+are off by default and require no configuration-file edits. Use a retained,
+immutable copy of each benchmark binary: rebuilding a binary while a runner
+starts fresh processes can mix variants and invalidates the comparison.
+
 ## Regenerating the Go fixtures
 
 `compat/wirefix.sh gen` rebuilds `go-wire.json` from the Go checkout. Run it
