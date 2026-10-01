@@ -39,6 +39,10 @@ validated and how the baselines below were taken.
 
 ## Sustained path and integrity tests
 
+See [the 2026-10-01 stability evaluation](download-stability-results.md) for
+retained/rejected changes, measured results and failed acceptance gates; raw
+benchmark outcomes are in `download-stability-results.json`.
+
 The interop runner can simulate RTT, jitter, loss and short loss bursts without
 changing the real client's code or any user configuration. It generates its
 own throwaway test configurations, as with the original scenarios.
