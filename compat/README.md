@@ -37,6 +37,47 @@ within 5 s of SIGTERM, which catches deadlocks.
 `-server-bin` also accepts the Go server, which is how the runner itself was
 validated and how the baselines below were taken.
 
+## Sustained path and integrity tests
+
+The interop runner can simulate RTT, jitter, loss and short loss bursts without
+changing the real client's code or any user configuration. It generates its
+own throwaway test configurations, as with the original scenarios.
+
+```sh
+cd compat/interop
+go build -o /tmp/interop .
+/tmp/interop -server-bin <server> -client-bin <unchanged-go-client> \
+  -scenarios tcp-download -sustained 60s -timeout 100 \
+  -path-rtt 200ms -path-jitter 30ms -path-loss 0.01 \
+  -repeat 3 -work /tmp/path-run -json /tmp/path-run.json
+
+# Short repeated outages, optional in the same command:
+# -burst-every 10s -burst-length 100ms
+
+# 15 independent 40 MiB uploads (tcp-upload is 8 MiB before scaling):
+/tmp/interop -server-bin <server> -client-bin <unchanged-go-client> \
+  -scenarios tcp-upload -scale 5 -repeat 15 -timeout 90 \
+  -work /tmp/upload-integrity -json /tmp/upload-integrity.json
+```
+
+`-sustained` controls continuous **download source generation**, not total
+scenario duration: connection setup and draining in-flight bytes add time.
+The source reports an independent byte count and SHA-256; the receiver also
+checks the deterministic byte stream. Repeat logs use separate `run-NN`
+directories. Timeouts and corruptions are failures, never successful speed
+samples.
+
+JSON includes application-delivered per-second Mbps, p10 and median goodput
+(including idle seconds, excluding the final partial second from percentiles),
+and the longest observed gap between application deliveries. The first gap
+includes connection setup. These are not resolver throughput, DNS response-type
+counts, or per-stream p95 pause statistics. Run alternatives sequentially and
+alternate their order; concurrent performance runs contaminate comparisons.
+The delay proxy uses a deterministic random seed, but thread scheduling and
+packet order mean it does not produce an identical loss trace across runs.
+`-path-jitter` adds a uniformly distributed extra delay to each direction;
+it approximates mixed path delays, not several independently balanced resolvers.
+
 ## Regenerating the Go fixtures
 
 `compat/wirefix.sh gen` rebuilds `go-wire.json` from the Go checkout. Run it

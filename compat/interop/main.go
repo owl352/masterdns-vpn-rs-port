@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,11 +37,14 @@ import (
 const tunnelDomain = "t.compat.test"
 
 type Impair struct {
-	Drop, Dup, Reorder float64
-	ReorderDelay       time.Duration
+	Drop, Dup, Reorder      float64
+	ReorderDelay            time.Duration
+	RTT, Jitter             time.Duration
+	BurstEvery, BurstLength time.Duration
 }
 
 type Scenario struct {
+	Run     int // log directory suffix when repeating
 	Name    string
 	Mode    string // "TCP" or "SOCKS5"
 	Work    string // "upload", "download", "echo"
@@ -53,30 +57,41 @@ type Scenario struct {
 }
 
 type Result struct {
-	Scenario      string  `json:"scenario"`
-	Pass          bool    `json:"pass"`
-	Error         string  `json:"error,omitempty"`
-	Seconds       float64 `json:"seconds"`
-	MiBps         float64 `json:"mib_s"`
-	CleanShutdown bool    `json:"clean_shutdown"`
-	ServerCPU     float64 `json:"server_cpu_s,omitempty"`
-	ServerRSSKB   int     `json:"server_rss_kb,omitempty"`
-	Queries       int64   `json:"queries,omitempty"`
-	CPUPerQueryUs float64 `json:"cpu_per_query_us,omitempty"`
-	LogErrors     int     `json:"server_log_errors"`
+	Scenario             string    `json:"scenario"`
+	Pass                 bool      `json:"pass"`
+	Error                string    `json:"error,omitempty"`
+	Seconds              float64   `json:"seconds"`
+	MiBps                float64   `json:"mib_s"`
+	CleanShutdown        bool      `json:"clean_shutdown"`
+	ServerCPU            float64   `json:"server_cpu_s,omitempty"`
+	ServerRSSKB          int       `json:"server_rss_kb,omitempty"`
+	Queries              int64     `json:"queries,omitempty"`
+	CPUPerQueryUs        float64   `json:"cpu_per_query_us,omitempty"`
+	LogErrors            int       `json:"server_log_errors"`
+	DownloadP10Mbps      float64   `json:"download_p10_mbps,omitempty"`
+	DownloadMedianMbps   float64   `json:"download_median_mbps,omitempty"`
+	LongestDeliveryGapMs float64   `json:"longest_delivery_gap_ms,omitempty"`
+	DownloadSamplesMbps  []float64 `json:"download_samples_mbps,omitempty"`
 }
 
 var (
-	serverBin  = flag.String("server-bin", "", "server binary under test (Rust port or Go reference)")
-	clientBin  = flag.String("client-bin", "", "Go client binary")
-	scenarios  = flag.String("scenarios", "all", "comma-separated scenario names, 'all', 'quick' or 'load'")
-	workDir    = flag.String("work", "", "directory for configs and logs (default: temp)")
-	socksHost  = flag.String("socks-host", "", "hostname the SOCKS5 tests connect to; must resolve to this machine and not be an IP literal (default: <LocalHostName>.local or $COMPAT_SOCKS_HOST)")
-	jsonOut    = flag.String("json", "", "write results as JSON to this file")
-	scale      = flag.Float64("scale", 1, "multiply transfer sizes")
-	timeoutSec = flag.Int("timeout", 180, "per-scenario timeout in seconds")
-	logLevel   = flag.String("log-level", "INFO", "LOG_LEVEL for the server and clients")
-	allowSkip  = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
+	sustained   = flag.Duration("sustained", 0, "generate continuous download traffic for this duration instead of fixed bytes")
+	repeat      = flag.Int("repeat", 1, "repeat selected scenarios with fresh server/client sessions")
+	serverBin   = flag.String("server-bin", "", "server binary under test (Rust port or Go reference)")
+	clientBin   = flag.String("client-bin", "", "Go client binary")
+	scenarios   = flag.String("scenarios", "all", "comma-separated scenario names, 'all', 'quick' or 'load'")
+	workDir     = flag.String("work", "", "directory for configs and logs (default: temp)")
+	socksHost   = flag.String("socks-host", "", "hostname the SOCKS5 tests connect to; must resolve to this machine and not be an IP literal (default: <LocalHostName>.local or $COMPAT_SOCKS_HOST)")
+	jsonOut     = flag.String("json", "", "write results as JSON to this file")
+	scale       = flag.Float64("scale", 1, "multiply transfer sizes")
+	timeoutSec  = flag.Int("timeout", 180, "per-scenario timeout in seconds")
+	logLevel    = flag.String("log-level", "INFO", "LOG_LEVEL for the server and clients")
+	pathRTT     = flag.Duration("path-rtt", 0, "simulated RTT, each direction gets half")
+	pathJitter  = flag.Duration("path-jitter", 0, "additional random one-way delay")
+	pathLoss    = flag.Float64("path-loss", 0, "independent datagram loss probability")
+	burstEvery  = flag.Duration("burst-every", 0, "period between simulated loss bursts")
+	burstLength = flag.Duration("burst-length", 0, "duration of simulated loss bursts")
+	allowSkip   = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
 )
 
 func allScenarios() []Scenario {
@@ -126,6 +141,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "need -server-bin and -client-bin")
 		os.Exit(2)
 	}
+	if *repeat < 1 || *sustained < 0 || *pathRTT < 0 || *pathJitter < 0 || *pathLoss < 0 || *pathLoss > 1 || *burstLength < 0 || *burstEvery < 0 || (*burstLength > 0 && (*burstEvery == 0 || *burstLength >= *burstEvery)) {
+		fmt.Fprintln(os.Stderr, "invalid repeat, duration, loss or burst settings")
+		os.Exit(2)
+	}
 	selected, err := pick(allScenarios(), *scenarios)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -139,35 +158,38 @@ func main() {
 
 	var results []Result
 	failed := 0
-	for _, sc := range selected {
-		if sc.Mode == "SOCKS5" && host == "" {
-			results = append(results, Result{Scenario: sc.Name, Error: "skipped: no -socks-host that resolves to this machine"})
-			if *allowSkip {
-				fmt.Printf("%-20s SKIP (no SOCKS host)\n", sc.Name)
-			} else {
-				fmt.Printf("%-20s FAIL (skipped: no SOCKS host; pass -socks-host or -allow-skip)\n", sc.Name)
+	for iteration := 0; iteration < *repeat; iteration++ {
+		for _, sc := range selected {
+			sc.Run = iteration + 1
+			if sc.Mode == "SOCKS5" && host == "" {
+				results = append(results, Result{Scenario: sc.Name, Error: "skipped: no -socks-host that resolves to this machine"})
+				if *allowSkip {
+					fmt.Printf("%-20s SKIP (no SOCKS host)\n", sc.Name)
+				} else {
+					fmt.Printf("%-20s FAIL (skipped: no SOCKS host; pass -socks-host or -allow-skip)\n", sc.Name)
+					failed++
+				}
+				continue
+			}
+			bindIP := "127.0.0.1"
+			if sc.Mode == "SOCKS5" {
+				bindIP = hostIP
+			}
+			r := runScenario(sc, host, bindIP)
+			results = append(results, r)
+			status := "PASS"
+			if !r.Pass {
+				status = "FAIL"
 				failed++
 			}
-			continue
-		}
-		bindIP := "127.0.0.1"
-		if sc.Mode == "SOCKS5" {
-			bindIP = hostIP
-		}
-		r := runScenario(sc, host, bindIP)
-		results = append(results, r)
-		status := "PASS"
-		if !r.Pass {
-			status = "FAIL"
-			failed++
-		}
-		extra := ""
-		if sc.Load {
-			extra = fmt.Sprintf("  server cpu %.2fs  rss %d KB  queries %d  %.1f µs/query", r.ServerCPU, r.ServerRSSKB, r.Queries, r.CPUPerQueryUs)
-		}
-		fmt.Printf("%-20s %s  %6.2fs  %7.2f MiB/s  shutdown=%v  log-errors=%d%s\n", sc.Name, status, r.Seconds, r.MiBps, r.CleanShutdown, r.LogErrors, extra)
-		if r.Error != "" {
-			fmt.Printf("%20s   %s\n", "", r.Error)
+			extra := ""
+			if sc.Load {
+				extra = fmt.Sprintf("  server cpu %.2fs  rss %d KB  queries %d  %.1f µs/query", r.ServerCPU, r.ServerRSSKB, r.Queries, r.CPUPerQueryUs)
+			}
+			fmt.Printf("%-20s %s  %6.2fs  %7.2f MiB/s  shutdown=%v  log-errors=%d%s\n", sc.Name, status, r.Seconds, r.MiBps, r.CleanShutdown, r.LogErrors, extra)
+			if r.Error != "" {
+				fmt.Printf("%20s   %s\n", "", r.Error)
+			}
 		}
 	}
 	if *jsonOut != "" {
@@ -231,6 +253,9 @@ func isLocalAddress(ip net.IP) bool {
 func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	res.Scenario = sc.Name
 	dir := filepath.Join(*workDir, sc.Name)
+	if *repeat > 1 {
+		dir = filepath.Join(dir, fmt.Sprintf("run-%02d", sc.Run))
+	}
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		res.Error = "work dir: " + err.Error()
@@ -238,6 +263,8 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	}
 
 	targets := newTargets()
+	targets.sourceBytes = sc.Bytes
+	targets.sourceDuration = *sustained
 	defer targets.close()
 	targetPort, err := targets.listen(sc.Work, bindIP)
 	if err != nil {
@@ -270,8 +297,12 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 
 	resolverPort := serverPort
 	var proxy *udpProxy
-	if sc.Impair != nil {
-		proxy, err = newUDPProxy(serverPort, *sc.Impair)
+	if sc.Impair != nil || *pathRTT > 0 || *pathJitter > 0 || *pathLoss > 0 || *burstEvery > 0 {
+		impairment := Impair{}
+		if sc.Impair != nil {
+			impairment = *sc.Impair
+		}
+		proxy, err = newUDPProxy(serverPort, impairment)
 		if err != nil {
 			res.Error = "proxy: " + err.Error()
 			return
@@ -310,7 +341,9 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	}
 
 	start := time.Now()
-	moved, err := runWork(sc, targets, listenPorts, host, targetPort)
+	meter := &deliveryMeter{start: time.Now(), last: time.Now()}
+	moved, err := runWork(sc, targets, listenPorts, host, targetPort, meter)
+	meter.finish(&res)
 	res.Seconds = time.Since(start).Seconds()
 	if err != nil {
 		res.Error = err.Error()
@@ -333,7 +366,7 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	return
 }
 
-func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort int) (int64, error) {
+func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort int, meter *deliveryMeter) (int64, error) {
 	deadline := time.Now().Add(time.Duration(*timeoutSec) * time.Second)
 	switch sc.Work {
 	case "upload":
@@ -359,7 +392,6 @@ func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort
 		return int64(sc.Bytes), nil
 
 	case "download":
-		t.sourceBytes = sc.Bytes
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", listenPorts[0]), 10*time.Second)
 		if err != nil {
 			return 0, err
@@ -367,13 +399,25 @@ func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort
 		defer conn.Close()
 		_ = conn.SetDeadline(deadline)
 		got := sha256.New()
-		n, err := io.Copy(got, conn)
+		n, err := io.Copy(io.MultiWriter(got, meter), conn)
 		if err != nil {
 			return 0, fmt.Errorf("download read after %d bytes: %w", n, err)
 		}
 		want := sha256.New()
-		_ = writeStream(want, 1, sc.Bytes)
-		if n != int64(sc.Bytes) || !bytes.Equal(got.Sum(nil), want.Sum(nil)) {
+		expected := int64(sc.Bytes)
+		if *sustained > 0 {
+			select {
+			case sent := <-t.sinkDigests:
+				expected = sent.n
+				if sent.sum != hex.EncodeToString(got.Sum(nil)) {
+					return n, errors.New("sustained download corrupted")
+				}
+			case <-time.After(time.Until(deadline)):
+				return n, errors.New("sustained source digest unavailable")
+			}
+		}
+		_ = writeStream(want, 1, int(expected))
+		if n != expected || n == 0 || !bytes.Equal(got.Sum(nil), want.Sum(nil)) {
 			return 0, fmt.Errorf("download corrupted: got %d of %d bytes", n, sc.Bytes)
 		}
 		return n, nil
@@ -387,7 +431,7 @@ func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort
 				wg.Add(1)
 				go func(port, seed int) {
 					defer wg.Done()
-					n, err := socksEcho(port, host, targetPort, seed, sc.Bytes, deadline)
+					n, err := socksEcho(port, host, targetPort, seed, sc.Bytes, deadline, meter)
 					moved.Add(n)
 					if err != nil {
 						errs <- fmt.Errorf("stream seed %d: %w", seed, err)
@@ -407,7 +451,7 @@ func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort
 
 // socksEcho opens a SOCKS5 stream through the client, sends a seeded stream
 // and checks it comes back unchanged. Returns bytes moved in both directions.
-func socksEcho(port int, host string, targetPort, seed, size int, deadline time.Time) (int64, error) {
+func socksEcho(port int, host string, targetPort, seed, size int, deadline time.Time, meter *deliveryMeter) (int64, error) {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 10*time.Second)
 	if err != nil {
 		return 0, err
@@ -427,7 +471,7 @@ func socksEcho(port int, host string, targetPort, seed, size int, deadline time.
 		writeErr <- err
 	}()
 	got := sha256.New()
-	n, err := io.CopyN(got, conn, int64(size))
+	n, err := io.CopyN(io.MultiWriter(got, meter), conn, int64(size))
 	if err != nil {
 		return n, fmt.Errorf("echo read after %d of %d bytes: %w", n, size, err)
 	}
@@ -499,9 +543,10 @@ type digest struct {
 }
 
 type targets struct {
-	ln          net.Listener
-	sinkDigests chan digest
-	sourceBytes int
+	ln             net.Listener
+	sinkDigests    chan digest
+	sourceBytes    int
+	sourceDuration time.Duration
 }
 
 func newTargets() *targets { return &targets{sinkDigests: make(chan digest, 16)} }
@@ -532,7 +577,26 @@ func (t *targets) serve(work string, c net.Conn) {
 		n, _ := io.Copy(h, c)
 		t.sinkDigests <- digest{n: n, sum: hex.EncodeToString(h.Sum(nil))}
 	case "download":
-		_ = writeStream(c, 1, t.sourceBytes)
+		if t.sourceDuration == 0 {
+			_ = writeStream(c, 1, t.sourceBytes)
+			return
+		}
+		_ = c.SetWriteDeadline(time.Now().Add(t.sourceDuration + 30*time.Second))
+		h := sha256.New()
+		writer := io.MultiWriter(c, h)
+		var sent int64
+		defer func() { t.sinkDigests <- digest{n: sent, sum: hex.EncodeToString(h.Sum(nil))} }()
+		rng := rand.New(rand.NewSource(1))
+		buf := make([]byte, 32*1024)
+		until := time.Now().Add(t.sourceDuration)
+		for time.Now().Before(until) {
+			rng.Read(buf)
+			n, err := writer.Write(buf)
+			sent += int64(n)
+			if err != nil {
+				return
+			}
+		}
 	case "echo":
 		_, _ = io.Copy(c, c)
 	}
@@ -557,16 +621,21 @@ type udpProxy struct {
 	closed   atomic.Bool
 	rng      *rand.Rand
 	rngMu    sync.Mutex
+	started  time.Time
 }
 
 func newUDPProxy(serverPort int, impair Impair) (*udpProxy, error) {
+	impair.RTT += *pathRTT
+	impair.Jitter += *pathJitter
+	impair.Drop = max(impair.Drop, *pathLoss)
+	impair.BurstEvery, impair.BurstLength = *burstEvery, *burstLength
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return nil, err
 	}
 	_ = conn.SetReadBuffer(8 << 20)
 	_ = conn.SetWriteBuffer(8 << 20)
-	p := &udpProxy{port: conn.LocalAddr().(*net.UDPAddr).Port, conn: conn, server: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: serverPort}, impair: impair, peers: map[string]*net.UDPConn{}, rng: rand.New(rand.NewSource(7))}
+	p := &udpProxy{started: time.Now(), port: conn.LocalAddr().(*net.UDPAddr).Port, conn: conn, server: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: serverPort}, impair: impair, peers: map[string]*net.UDPConn{}, rng: rand.New(rand.NewSource(7))}
 	go p.clientLoop()
 	return p, nil
 }
@@ -579,6 +648,12 @@ func (p *udpProxy) roll() float64 {
 
 // deliver applies drop/duplicate/reorder to one datagram.
 func (p *udpProxy) deliver(send func([]byte), pkt []byte) {
+	if p.closed.Load() {
+		return
+	}
+	if p.impair.BurstEvery > 0 && time.Since(p.started)%p.impair.BurstEvery < p.impair.BurstLength {
+		return
+	}
 	if p.impair.Drop > 0 && p.roll() < p.impair.Drop {
 		return
 	}
@@ -587,12 +662,20 @@ func (p *udpProxy) deliver(send func([]byte), pkt []byte) {
 		copies = 2
 	}
 	for i := 0; i < copies; i++ {
+		delay := p.impair.RTT/2 + time.Duration(p.roll()*float64(p.impair.Jitter))
 		if p.impair.Reorder > 0 && p.roll() < p.impair.Reorder {
-			data := append([]byte(nil), pkt...)
-			time.AfterFunc(p.impair.ReorderDelay, func() { send(data) })
-			continue
+			delay += p.impair.ReorderDelay
 		}
-		send(pkt)
+		if delay > 0 {
+			data := append([]byte(nil), pkt...)
+			time.AfterFunc(delay, func() {
+				if !p.closed.Load() {
+					send(data)
+				}
+			})
+		} else {
+			send(pkt)
+		}
 	}
 }
 
@@ -890,4 +973,45 @@ func procRSSKB(pid int) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// deliveryMeter measures application-delivered bytes, including idle seconds.
+// Kept in the test runner; the server hot path has no instrumentation cost.
+type deliveryMeter struct {
+	mu          sync.Mutex
+	start, last time.Time
+	longest     time.Duration
+	buckets     []int64
+}
+
+func (m *deliveryMeter) Write(b []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if gap := now.Sub(m.last); gap > m.longest {
+		m.longest = gap
+	}
+	m.last = now
+	second := int(now.Sub(m.start) / time.Second)
+	for len(m.buckets) <= second {
+		m.buckets = append(m.buckets, 0)
+	}
+	m.buckets[second] += int64(len(b))
+	return len(b), nil
+}
+func (m *deliveryMeter) finish(r *Result) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r.LongestDeliveryGapMs = float64(m.longest) / float64(time.Millisecond)
+	// Exclude the partial final second from percentiles, but retain its raw sample.
+	for _, b := range m.buckets {
+		r.DownloadSamplesMbps = append(r.DownloadSamplesMbps, float64(b)*8/1e6)
+	}
+	if len(m.buckets) < 2 {
+		return
+	}
+	values := append([]float64(nil), r.DownloadSamplesMbps[:len(m.buckets)-1]...)
+	sort.Float64s(values)
+	r.DownloadP10Mbps = values[(len(values)-1)/10]
+	r.DownloadMedianMbps = values[len(values)/2]
 }
