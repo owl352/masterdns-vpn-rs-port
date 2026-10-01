@@ -37,6 +37,25 @@ within 5 s of SIGTERM, which catches deadlocks.
 `-server-bin` also accepts the Go server, which is how the runner itself was
 validated and how the baselines below were taken.
 
+## Latest recovery-efficiency evaluation
+
+See [recovery efficiency results](recovery-efficiency-results.md) for bounded
+ACK work, timer coalescing, intentional duplication accounting, mixed-path
+comparisons and remaining pause/runtime validation limits. Raw results are in
+`recovery-efficiency-results.json`.
+
+The runner accepts test-only `-client-dup`, `-client-setup-dup`, `-batch`,
+`-window`, `-download-mtu`, `-compression`, `-rto` and `-max-rto` flags.
+`-slow-rtt` / `-slow-share` assign reproducible slow groups by DNS id, applying
+the same group to request and response. These approximate mixed delays, not
+independent public resolver caches. Default routine settings are unchanged.
+No user configuration files are modified.
+
+Current `first_delivery_ms` / per-stream `first_byte_ms` separate setup from
+mid-transfer gaps. Failed/incomplete streams retain their final read wait;
+successful streams do not count post-delivery upload-completion wait as a gap.
+Older result files use the previous accounting, as documented in their reports.
+
 ## Sustained path and integrity tests
 
 See [the software stall recovery results](stall-recovery-results.md) for the
@@ -74,8 +93,7 @@ samples.
 
 JSON includes application-delivered per-second Mbps, p10 and median goodput
 (including idle seconds, excluding the final partial second from percentiles),
-and the longest observed gap between application deliveries. The first gap
-includes connection setup. These are not resolver throughput, DNS response-type
+and the longest observed gap between application deliveries. First-byte latency is reported separately from mid-transfer gaps. These are not resolver throughput, DNS response-type
 counts, or per-stream p95 pause statistics. Run alternatives sequentially and
 alternate their order; concurrent performance runs contaminate comparisons.
 The delay proxy uses a deterministic random seed, but thread scheduling and

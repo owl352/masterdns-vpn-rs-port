@@ -1,0 +1,3759 @@
+{
+  "date": "2026-10-01",
+  "branch": "recovery-efficiency",
+  "core_commit": "d13b8a0",
+  "test_commit": "fb69d7d",
+  "linux_test_architecture": "aarch64 (native)",
+  "delivered_architecture": "x86_64-unknown-linux-gnu.2.28",
+  "artifact_sha256": "297f562185631a7babad89738ca3ae7edcf7d400b576cadc37f81d32c4ff029c",
+  "baseline_final_native_hashes": "ad3e55a0da7c3888d6ac92310a99f012ae7c115d34f0fe0aeb9e82e4b861104b  /cache/bin/rust-server\n278a4a31b6752236f21de67e74e8e7b51f401a2764ed6609b956fdda8185dcdd  /final-server\n",
+  "ack_benchmark_before": "   Compiling arq v0.1.0 (/Volumes/990/vpn/masterdns-vpn-rs/crates/arq)\n    Finished `release` profile [optimized] target(s) in 8.71s\n     Running unittests src/lib.rs (/Volumes/990/vpn/masterdns-vpn-rs/target/release/deps/arq-ae30d07b1d31daf6)\n\nrunning 1 test\nack_bench window=300 ns_per_ack=168.9\nack_bench window=1000 ns_per_ack=605.1\nack_bench window=8000 ns_per_ack=3448.5\ntest tests::ack_window_cost_benchmark ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.57s\n\n",
+  "ack_benchmark_after": "   Compiling arq v0.1.0 (/Volumes/990/vpn/masterdns-vpn-rs/crates/arq)\n    Finished `release` profile [optimized] target(s) in 8.31s\n     Running unittests src/lib.rs (/Volumes/990/vpn/masterdns-vpn-rs/target/release/deps/arq-ae30d07b1d31daf6)\n\nrunning 1 test\nack_bench window=300 ns_per_ack=78.2\nack_bench window=1000 ns_per_ack=91.4\nack_bench window=8000 ns_per_ack=82.3\ntest tests::ack_window_cost_benchmark ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.02s\n\n",
+  "notes": [
+    "Original Go client and user configurations unchanged.",
+    "Configured duplication 2 is intentional, not itself a defect.",
+    "Original gap measurements include setup; corrected_gaps runs separate first-byte delay and exclude successful completion wait.",
+    "Latency outliers remain; all-metrics non-regression is not established.",
+    "Native Linux baseline and candidate used different build workflows; toolchain differences may confound end-to-end CPU comparisons.",
+    "No actual user VM server CPU profile was collected.",
+    "The x86-64 cross-build succeeded; its runtime smoke check was blocked by unavailable runtime image and permissions. Native ARM64 Linux tests exercise the same source."
+  ],
+  "runs": {
+    "linux_final-2": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 69.075803824,
+        "mib_s": 0.20719990514286568,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.54,
+        "server_rss_kb": 8028,
+        "queries": 16036,
+        "cpu_per_query_us": 158.39361436767274,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.310784,
+        "download_median_mbps": 1.724352,
+        "longest_delivery_gap_ms": 539.193042,
+        "download_samples_mbps": [
+          0.472,
+          1.012928,
+          1.333568,
+          1.405568,
+          2.164352,
+          1.406784,
+          1.181568,
+          1.405568,
+          2.140352,
+          1.733568,
+          2.851136,
+          2.212352,
+          2.228352,
+          1.629568,
+          1.469568,
+          1.909568,
+          1.045568,
+          1.493568,
+          1.901568,
+          1.725568,
+          2.260352,
+          1.756352,
+          1.318784,
+          1.405568,
+          1.693568,
+          1.596352,
+          1.414784,
+          2.084352,
+          2.228352,
+          2.172352,
+          1.078784,
+          1.924352,
+          2.164352,
+          2.380352,
+          2.132352,
+          2.125568,
+          1.764352,
+          1.493568,
+          1.541568,
+          1.453568,
+          1.405568,
+          1.725568,
+          2.092352,
+          1.557568,
+          2.380352,
+          2.156352,
+          1.406784,
+          1.628352,
+          1.541568,
+          1.310784,
+          1.365568,
+          1.557568,
+          1.820352,
+          2.101568,
+          1.724352,
+          2.069568,
+          1.628352,
+          2.292352,
+          1.845568,
+          1.605568,
+          2.148352,
+          1.948352,
+          1.805568,
+          1.693568,
+          2.508352,
+          1.477568,
+          1.157568,
+          1.581568,
+          1.812288
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 12.010010338,
+        "mib_s": 1.33222200062356,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.82,
+        "server_rss_kb": 17684,
+        "queries": 112368,
+        "cpu_per_query_us": 16.19678200199345,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.346144,
+        "download_median_mbps": 5.765296,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 491.526
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 577.848542
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 675.297667
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 676.756834
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 798.281958
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 2333.557458
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1672.363417
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 933.156626
+          }
+        ],
+        "longest_delivery_gap_ms": 770.67325,
+        "download_samples_mbps": [
+          1.346144,
+          12.9738,
+          4.97412,
+          8.346576,
+          6.247632,
+          5.136952,
+          6.41316,
+          6.857832,
+          5.605664,
+          2.771728,
+          5.765296,
+          0.521288,
+          0.148672
+        ]
+      }
+    ],
+    "linux_linux-all": [
+      {
+        "scenario": "tcp-upload",
+        "pass": true,
+        "seconds": 10.334438546,
+        "mib_s": 0.7741107525475047,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.57,
+        "server_rss_kb": 14588,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 0.773306709,
+        "mib_s": 41.38073500148568,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.33,
+        "server_rss_kb": 6276,
+        "server_log_errors": 0,
+        "longest_delivery_gap_ms": 102.673541,
+        "download_samples_mbps": [
+          268.435456
+        ]
+      },
+      {
+        "scenario": "tcp-download-aes",
+        "pass": true,
+        "seconds": 0.287405584,
+        "mib_s": 27.835228142261844,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.09,
+        "server_rss_kb": 6268,
+        "server_log_errors": 0,
+        "longest_delivery_gap_ms": 102.105167,
+        "download_samples_mbps": [
+          67.108864
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 0.676398917,
+        "mib_s": 23.654680097602817,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.6,
+        "server_rss_kb": 17236,
+        "server_log_errors": 0,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 115.352084
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 114.899167
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 112.001916
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 113.310167
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 117.715125
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 120.415625
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 113.341166
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 243.50475
+          }
+        ],
+        "longest_delivery_gap_ms": 239.815792,
+        "download_samples_mbps": [
+          67.108864
+        ]
+      },
+      {
+        "scenario": "tcp-upload-lossy",
+        "pass": true,
+        "seconds": 5.216378169,
+        "mib_s": 0.38340778509611156,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.33,
+        "server_rss_kb": 11588,
+        "queries": 27208,
+        "cpu_per_query_us": 12.128785651279035,
+        "injected_query_copies": 520,
+        "injected_reply_copies": 521,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "tcp-download-lossy",
+        "pass": true,
+        "seconds": 6.356525795,
+        "mib_s": 0.6292745642826421,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.17,
+        "server_rss_kb": 6140,
+        "queries": 1151,
+        "cpu_per_query_us": 147.6976542137272,
+        "injected_query_copies": 24,
+        "injected_reply_copies": 30,
+        "server_log_errors": 0,
+        "download_p10_mbps": 2.227712,
+        "download_median_mbps": 5.631488,
+        "longest_delivery_gap_ms": 287.414875,
+        "download_samples_mbps": [
+          2.227712,
+          6.925056,
+          5.215488,
+          6.006272,
+          5.023488,
+          5.631488,
+          2.524928
+        ]
+      },
+      {
+        "scenario": "socks-echo-lossy",
+        "pass": true,
+        "seconds": 4.9181315009999995,
+        "mib_s": 0.8133170085400692,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.25,
+        "server_rss_kb": 14224,
+        "queries": 16966,
+        "cpu_per_query_us": 14.735353059059294,
+        "injected_query_copies": 346,
+        "injected_reply_copies": 319,
+        "server_log_errors": 0,
+        "download_p10_mbps": 2.24,
+        "download_median_mbps": 3.323624,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 524288,
+            "longest_gap_ms": 692.244832
+          },
+          {
+            "seed": 4,
+            "received_bytes": 524288,
+            "longest_gap_ms": 366.490709
+          },
+          {
+            "seed": 2,
+            "received_bytes": 524288,
+            "longest_gap_ms": 322.648417
+          },
+          {
+            "seed": 3,
+            "received_bytes": 524288,
+            "longest_gap_ms": 321.777791
+          }
+        ],
+        "longest_delivery_gap_ms": 267.981458,
+        "download_samples_mbps": [
+          6.844376,
+          3.323624,
+          2.24,
+          2.24,
+          2.129216
+        ]
+      },
+      {
+        "scenario": "load-sessions",
+        "pass": true,
+        "seconds": 4.493492169,
+        "mib_s": 7.121409985036519,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.99,
+        "server_rss_kb": 43140,
+        "queries": 142082,
+        "cpu_per_query_us": 6.967807322532059,
+        "server_log_errors": 0,
+        "download_p10_mbps": 11.630568,
+        "download_median_mbps": 38.713056,
+        "stream_progress": [
+          {
+            "seed": 6003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 419.383625
+          },
+          {
+            "seed": 4002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 291.151083
+          },
+          {
+            "seed": 4004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 297.426001
+          },
+          {
+            "seed": 4001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 422.248334
+          },
+          {
+            "seed": 4003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 292.974958
+          },
+          {
+            "seed": 1001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 353.898125
+          },
+          {
+            "seed": 3004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 494.716
+          },
+          {
+            "seed": 1003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 422.355291
+          },
+          {
+            "seed": 3001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 497.154458
+          },
+          {
+            "seed": 3003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 497.397875
+          },
+          {
+            "seed": 1002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 573.96375
+          },
+          {
+            "seed": 2,
+            "received_bytes": 524288,
+            "longest_gap_ms": 297.327834
+          },
+          {
+            "seed": 5004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 714.498334
+          },
+          {
+            "seed": 6001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 675.443917
+          },
+          {
+            "seed": 3002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 504.293917
+          },
+          {
+            "seed": 1004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 516.960667
+          },
+          {
+            "seed": 3,
+            "received_bytes": 524288,
+            "longest_gap_ms": 394.755708
+          },
+          {
+            "seed": 5001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1367.640334
+          },
+          {
+            "seed": 7001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1127.276459
+          },
+          {
+            "seed": 2001,
+            "received_bytes": 524288,
+            "longest_gap_ms": 905.888375
+          },
+          {
+            "seed": 2002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 593.050042
+          },
+          {
+            "seed": 2004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1276.441959
+          },
+          {
+            "seed": 2003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1693.116585
+          },
+          {
+            "seed": 6002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1244.351293
+          },
+          {
+            "seed": 5002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 609.860667
+          },
+          {
+            "seed": 6004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 721.346334
+          },
+          {
+            "seed": 5003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 723.966708
+          },
+          {
+            "seed": 4,
+            "received_bytes": 524288,
+            "longest_gap_ms": 708.106333
+          },
+          {
+            "seed": 1,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1088.181959
+          },
+          {
+            "seed": 7004,
+            "received_bytes": 524288,
+            "longest_gap_ms": 777.968625
+          },
+          {
+            "seed": 7003,
+            "received_bytes": 524288,
+            "longest_gap_ms": 769.055542
+          },
+          {
+            "seed": 7002,
+            "received_bytes": 524288,
+            "longest_gap_ms": 1285.333834
+          }
+        ],
+        "longest_delivery_gap_ms": 160.32825,
+        "download_samples_mbps": [
+          38.501648,
+          38.713056,
+          42.595912,
+          11.630568,
+          2.776544
+        ]
+      },
+      {
+        "scenario": "load-streams",
+        "pass": true,
+        "seconds": 1.534040667,
+        "mib_s": 10.429971215358922,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.56,
+        "server_rss_kb": 31492,
+        "queries": 62851,
+        "cpu_per_query_us": 8.90996165534359,
+        "server_log_errors": 0,
+        "download_p10_mbps": 65.382696,
+        "download_median_mbps": 65.382696,
+        "stream_progress": [
+          {
+            "seed": 46,
+            "received_bytes": 131072,
+            "longest_gap_ms": 295.941833
+          },
+          {
+            "seed": 6,
+            "received_bytes": 131072,
+            "longest_gap_ms": 290.642875
+          },
+          {
+            "seed": 29,
+            "received_bytes": 131072,
+            "longest_gap_ms": 299.106625
+          },
+          {
+            "seed": 48,
+            "received_bytes": 131072,
+            "longest_gap_ms": 330.643375
+          },
+          {
+            "seed": 47,
+            "received_bytes": 131072,
+            "longest_gap_ms": 331.386917
+          },
+          {
+            "seed": 23,
+            "received_bytes": 131072,
+            "longest_gap_ms": 330.554667
+          },
+          {
+            "seed": 22,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.011833
+          },
+          {
+            "seed": 21,
+            "received_bytes": 131072,
+            "longest_gap_ms": 299.682875
+          },
+          {
+            "seed": 32,
+            "received_bytes": 131072,
+            "longest_gap_ms": 338.830125
+          },
+          {
+            "seed": 3,
+            "received_bytes": 131072,
+            "longest_gap_ms": 299.113042
+          },
+          {
+            "seed": 5,
+            "received_bytes": 131072,
+            "longest_gap_ms": 330.97125
+          },
+          {
+            "seed": 4,
+            "received_bytes": 131072,
+            "longest_gap_ms": 300.161334
+          },
+          {
+            "seed": 45,
+            "received_bytes": 131072,
+            "longest_gap_ms": 293.217208
+          },
+          {
+            "seed": 18,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.455708
+          },
+          {
+            "seed": 40,
+            "received_bytes": 131072,
+            "longest_gap_ms": 337.957458
+          },
+          {
+            "seed": 20,
+            "received_bytes": 131072,
+            "longest_gap_ms": 339.781042
+          },
+          {
+            "seed": 13,
+            "received_bytes": 131072,
+            "longest_gap_ms": 338.500834
+          },
+          {
+            "seed": 24,
+            "received_bytes": 131072,
+            "longest_gap_ms": 338.935083
+          },
+          {
+            "seed": 63,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.399666
+          },
+          {
+            "seed": 17,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.318167
+          },
+          {
+            "seed": 41,
+            "received_bytes": 131072,
+            "longest_gap_ms": 397.03125
+          },
+          {
+            "seed": 14,
+            "received_bytes": 131072,
+            "longest_gap_ms": 397.483375
+          },
+          {
+            "seed": 38,
+            "received_bytes": 131072,
+            "longest_gap_ms": 291.101667
+          },
+          {
+            "seed": 44,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.942375
+          },
+          {
+            "seed": 7,
+            "received_bytes": 131072,
+            "longest_gap_ms": 300.881041
+          },
+          {
+            "seed": 30,
+            "received_bytes": 131072,
+            "longest_gap_ms": 342.66975
+          },
+          {
+            "seed": 12,
+            "received_bytes": 131072,
+            "longest_gap_ms": 341.231833
+          },
+          {
+            "seed": 26,
+            "received_bytes": 131072,
+            "longest_gap_ms": 339.651375
+          },
+          {
+            "seed": 42,
+            "received_bytes": 131072,
+            "longest_gap_ms": 337.9285
+          },
+          {
+            "seed": 54,
+            "received_bytes": 131072,
+            "longest_gap_ms": 295.90525
+          },
+          {
+            "seed": 25,
+            "received_bytes": 131072,
+            "longest_gap_ms": 298.458375
+          },
+          {
+            "seed": 1,
+            "received_bytes": 131072,
+            "longest_gap_ms": 296.577875
+          },
+          {
+            "seed": 58,
+            "received_bytes": 131072,
+            "longest_gap_ms": 310.285292
+          },
+          {
+            "seed": 53,
+            "received_bytes": 131072,
+            "longest_gap_ms": 339.00775
+          },
+          {
+            "seed": 43,
+            "received_bytes": 131072,
+            "longest_gap_ms": 341.475375
+          },
+          {
+            "seed": 62,
+            "received_bytes": 131072,
+            "longest_gap_ms": 397.182417
+          },
+          {
+            "seed": 51,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.962666
+          },
+          {
+            "seed": 61,
+            "received_bytes": 131072,
+            "longest_gap_ms": 298.177041
+          },
+          {
+            "seed": 60,
+            "received_bytes": 131072,
+            "longest_gap_ms": 373.459417
+          },
+          {
+            "seed": 37,
+            "received_bytes": 131072,
+            "longest_gap_ms": 303.258875
+          },
+          {
+            "seed": 15,
+            "received_bytes": 131072,
+            "longest_gap_ms": 341.426834
+          },
+          {
+            "seed": 11,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.278084
+          },
+          {
+            "seed": 8,
+            "received_bytes": 131072,
+            "longest_gap_ms": 338.148708
+          },
+          {
+            "seed": 56,
+            "received_bytes": 131072,
+            "longest_gap_ms": 302.145333
+          },
+          {
+            "seed": 9,
+            "received_bytes": 131072,
+            "longest_gap_ms": 397.368334
+          },
+          {
+            "seed": 10,
+            "received_bytes": 131072,
+            "longest_gap_ms": 505.935958
+          },
+          {
+            "seed": 2,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.050459
+          },
+          {
+            "seed": 50,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.080959
+          },
+          {
+            "seed": 33,
+            "received_bytes": 131072,
+            "longest_gap_ms": 505.976917
+          },
+          {
+            "seed": 64,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.922375
+          },
+          {
+            "seed": 16,
+            "received_bytes": 131072,
+            "longest_gap_ms": 330.535709
+          },
+          {
+            "seed": 34,
+            "received_bytes": 131072,
+            "longest_gap_ms": 498.146167
+          },
+          {
+            "seed": 39,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.345042
+          },
+          {
+            "seed": 28,
+            "received_bytes": 131072,
+            "longest_gap_ms": 330.721626
+          },
+          {
+            "seed": 19,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.085417
+          },
+          {
+            "seed": 35,
+            "received_bytes": 131072,
+            "longest_gap_ms": 497.462626
+          },
+          {
+            "seed": 59,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.761708
+          },
+          {
+            "seed": 57,
+            "received_bytes": 131072,
+            "longest_gap_ms": 373.479584
+          },
+          {
+            "seed": 36,
+            "received_bytes": 131072,
+            "longest_gap_ms": 414.340542
+          },
+          {
+            "seed": 49,
+            "received_bytes": 131072,
+            "longest_gap_ms": 396.698458
+          },
+          {
+            "seed": 31,
+            "received_bytes": 131072,
+            "longest_gap_ms": 347.547167
+          },
+          {
+            "seed": 27,
+            "received_bytes": 131072,
+            "longest_gap_ms": 416.988542
+          },
+          {
+            "seed": 52,
+            "received_bytes": 131072,
+            "longest_gap_ms": 340.074417
+          },
+          {
+            "seed": 55,
+            "received_bytes": 131072,
+            "longest_gap_ms": 414.37625
+          }
+        ],
+        "longest_delivery_gap_ms": 288.487375,
+        "download_samples_mbps": [
+          65.382696,
+          1.726168
+        ]
+      }
+    ],
+    "linux_baseline-2": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 74.181217826,
+        "mib_s": 0.1685062656873616,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.49,
+        "server_rss_kb": 7564,
+        "queries": 14915,
+        "cpu_per_query_us": 166.94602748910492,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.030784,
+        "download_median_mbps": 1.429568,
+        "longest_delivery_gap_ms": 445.727167,
+        "download_samples_mbps": [
+          0.32,
+          0.940928,
+          1.246784,
+          1.309568,
+          1.445568,
+          1.069568,
+          1.062784,
+          1.445568,
+          1.501568,
+          1.829568,
+          1.685568,
+          1.333568,
+          1.812352,
+          1.030784,
+          1.221568,
+          1.478784,
+          1.485568,
+          1.429568,
+          1.533568,
+          1.852352,
+          1.278784,
+          1.365568,
+          1.341568,
+          1.333568,
+          1.461568,
+          1.493568,
+          1.342784,
+          0.805568,
+          1.182784,
+          1.022784,
+          1.333568,
+          1.301568,
+          1.669568,
+          1.525568,
+          0.974784,
+          1.029568,
+          1.094784,
+          1.501568,
+          1.197568,
+          1.405568,
+          2.013568,
+          1.533568,
+          1.373568,
+          2.068352,
+          1.206784,
+          1.796352,
+          1.589568,
+          1.893568,
+          1.349568,
+          1.509568,
+          1.325568,
+          1.469568,
+          1.365568,
+          1.437568,
+          0.974784,
+          1.166784,
+          1.652352,
+          1.837568,
+          1.469568,
+          1.853568,
+          1.668352,
+          1.605568,
+          1.645568,
+          1.821568,
+          1.661568,
+          1.341568,
+          1.908352,
+          1.877568,
+          1.085568,
+          1.350784,
+          1.485568,
+          1.373568,
+          1.277568,
+          1.038784,
+          0.130048
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 13.471024005,
+        "mib_s": 1.1877345028901536,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.32,
+        "server_rss_kb": 17488,
+        "queries": 117202,
+        "cpu_per_query_us": 19.79488404634733,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.369504,
+        "download_median_mbps": 4.667504,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1356.769959
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1010.675584
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 698.442667
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 905.705417
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1146.139667
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1892.746376
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1581.967666
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1726.835418
+          }
+        ],
+        "longest_delivery_gap_ms": 352.166625,
+        "download_samples_mbps": [
+          1.4514,
+          9.944,
+          7.590904,
+          7.314264,
+          4.185112,
+          7.270088,
+          7.751688,
+          4.667504,
+          9.6132,
+          1.89796,
+          0.52672,
+          1.369504,
+          2.324392,
+          1.202128
+        ]
+      }
+    ],
+    "linux_diagnostic": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 44.385061854,
+        "mib_s": 0.17953675554654777,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.35,
+        "server_rss_kb": 7744,
+        "queries": 8995,
+        "cpu_per_query_us": 150.0833796553641,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.974784,
+        "download_median_mbps": 1.461568,
+        "longest_delivery_gap_ms": 436.268625,
+        "download_samples_mbps": [
+          0.328,
+          0.804928,
+          1.429568,
+          1.917568,
+          1.437568,
+          1.861568,
+          2.355136,
+          1.837568,
+          1.893568,
+          1.620352,
+          1.965568,
+          0.918784,
+          1.429568,
+          1.525568,
+          1.812352,
+          2.724352,
+          1.876352,
+          2.180352,
+          2.205568,
+          1.628352,
+          1.413568,
+          1.150784,
+          1.429568,
+          1.174784,
+          1.980352,
+          0.998784,
+          1.780352,
+          1.461568,
+          0.782784,
+          1.182784,
+          1.381568,
+          1.141568,
+          1.430784,
+          1.860352,
+          1.213568,
+          1.326784,
+          1.589568,
+          1.357568,
+          0.974784,
+          1.604352,
+          1.310784,
+          1.557568,
+          1.453568,
+          1.469568,
+          0.066368
+        ]
+      }
+    ],
+    "linux_baseline-1": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 74.343496617,
+        "mib_s": 0.15594840877243427,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.3,
+        "server_rss_kb": 7932,
+        "queries": 13734,
+        "cpu_per_query_us": 167.4675986602592,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.942784,
+        "download_median_mbps": 1.341568,
+        "longest_delivery_gap_ms": 484.621625,
+        "download_samples_mbps": [
+          0.152,
+          0.632,
+          0.612928,
+          1.437568,
+          1.365568,
+          0.966784,
+          1.245568,
+          0.870784,
+          1.24,
+          1.340352,
+          0.926784,
+          1.181568,
+          1.189568,
+          1.118784,
+          1.341568,
+          1.341568,
+          1.438784,
+          0.822784,
+          1.413568,
+          1.093568,
+          1.142784,
+          1.269568,
+          1.413568,
+          1.293568,
+          1.310784,
+          1.165568,
+          1.469568,
+          1.453568,
+          1.741568,
+          1.733568,
+          1.301568,
+          0.966784,
+          1.197568,
+          1.541568,
+          1.405568,
+          1.493568,
+          1.501568,
+          1.485568,
+          1.525568,
+          1.469568,
+          1.278784,
+          1.285568,
+          1.645568,
+          1.429568,
+          1.173568,
+          0.974784,
+          1.397568,
+          1.310784,
+          1.605568,
+          1.269568,
+          0.942784,
+          1.325568,
+          1.349568,
+          1.605568,
+          1.646784,
+          1.580352,
+          1.852352,
+          1.086784,
+          1.173568,
+          1.214784,
+          1.165568,
+          0.950784,
+          1.006784,
+          1.740352,
+          1.389568,
+          0.910784,
+          1.533568,
+          2.092352,
+          1.613568,
+          1.581568,
+          1.877568,
+          1.645568,
+          1.461568,
+          1.437568,
+          0.083712
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 13.234495881,
+        "mib_s": 1.2089618028420919,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.18,
+        "server_rss_kb": 16644,
+        "queries": 112241,
+        "cpu_per_query_us": 19.422492672018247,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.726264,
+        "download_median_mbps": 3.638312,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 612.548417
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 544.55425
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 621.824667
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 633.385459
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 592.277459
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1674.575875
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 648.104459
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1377.576501
+          }
+        ],
+        "longest_delivery_gap_ms": 217.926584,
+        "download_samples_mbps": [
+          1.25584,
+          15.0348,
+          2.706744,
+          11.507192,
+          4.609576,
+          5.208128,
+          8.937968,
+          4.394792,
+          2.711376,
+          3.638312,
+          2.764328,
+          2.407704,
+          1.726264,
+          0.20584
+        ]
+      }
+    ],
+    "linux_final-1": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 72.054863116,
+        "mib_s": 0.18605614416916574,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.34,
+        "server_rss_kb": 7232,
+        "queries": 15106,
+        "cpu_per_query_us": 154.9053356282272,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.166784,
+        "download_median_mbps": 1.549568,
+        "longest_delivery_gap_ms": 555.543625,
+        "download_samples_mbps": [
+          0.424,
+          0.956928,
+          0.750784,
+          1.150784,
+          1.772352,
+          1.549568,
+          1.070784,
+          1.277568,
+          1.309568,
+          1.509568,
+          1.493568,
+          1.493568,
+          1.422784,
+          1.445568,
+          1.477568,
+          1.509568,
+          1.589568,
+          2.084352,
+          1.173568,
+          1.925568,
+          1.501568,
+          1.285568,
+          1.621568,
+          1.549568,
+          2.044352,
+          1.206784,
+          1.525568,
+          2.196352,
+          1.884352,
+          2.148352,
+          1.797568,
+          2.076352,
+          1.629568,
+          1.261568,
+          1.134784,
+          1.301568,
+          1.741568,
+          1.245568,
+          1.541568,
+          1.709568,
+          1.461568,
+          1.597568,
+          1.557568,
+          1.988352,
+          1.533568,
+          1.477568,
+          1.974784,
+          1.180352,
+          2.580352,
+          1.756352,
+          2.037568,
+          1.557568,
+          2.108352,
+          1.613568,
+          1.637568,
+          1.341568,
+          1.501568,
+          1.549568,
+          2.004352,
+          1.166784,
+          1.573568,
+          1.788352,
+          1.310784,
+          1.660352,
+          1.645568,
+          1.541568,
+          1.901568,
+          1.660352,
+          1.549568,
+          1.118784,
+          1.892352,
+          1.399168
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 13.462803214000001,
+        "mib_s": 1.188459769163198,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.87,
+        "server_rss_kb": 16848,
+        "queries": 112948,
+        "cpu_per_query_us": 16.556291390728475,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.44,
+        "download_median_mbps": 5.049144,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 558.406084
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1106.774501
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 424.863584
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1576.052251
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 577.198042
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 642.742834
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 698.368334
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 702.354292
+          }
+        ],
+        "longest_delivery_gap_ms": 518.787667,
+        "download_samples_mbps": [
+          1.326896,
+          9.383624,
+          6.310728,
+          10.997264,
+          4.004672,
+          7.396088,
+          9.801616,
+          5.049144,
+          6.044024,
+          5.017648,
+          0.785064,
+          0.367376,
+          0.44,
+          0.18472
+        ]
+      }
+    ],
+    "corrected_gaps_final-2": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 13.38640609,
+        "mib_s": 1.1952423893633726,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.74,
+        "server_rss_kb": 17720,
+        "queries": 112379,
+        "cpu_per_query_us": 15.483319837336158,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.688,
+        "download_median_mbps": 4.822832,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 529.220542,
+            "first_byte_ms": 267.786209
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 585.95475,
+            "first_byte_ms": 407.663084
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 948.055042,
+            "first_byte_ms": 225.664334
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 593.974333,
+            "first_byte_ms": 229.653334
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1095.234,
+            "first_byte_ms": 234.267708
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1716.098584,
+            "first_byte_ms": 234.378584
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 985.000126,
+            "first_byte_ms": 267.077084
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 675.789917,
+            "first_byte_ms": 225.597208
+          }
+        ],
+        "first_delivery_ms": 226.199959,
+        "longest_delivery_gap_ms": 266.517292,
+        "download_samples_mbps": [
+          1.3808,
+          14.880448,
+          1.759592,
+          9.944232,
+          5.990496,
+          1.573536,
+          10.05452,
+          5.85208,
+          4.822832,
+          6.419864,
+          3.117576,
+          0.361784,
+          0.688,
+          0.263104
+        ]
+      }
+    ],
+    "corrected_gaps_final-3": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 11.809268131,
+        "mib_s": 1.3548680428382425,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.84,
+        "server_rss_kb": 17156,
+        "queries": 110970,
+        "cpu_per_query_us": 16.58105794358836,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.681656,
+        "download_median_mbps": 4.22408,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 644.7365,
+            "first_byte_ms": 223.588375
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 459.679334,
+            "first_byte_ms": 262.24025
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 602.266042,
+            "first_byte_ms": 223.483583
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 610.658959,
+            "first_byte_ms": 223.531291
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 522.035459,
+            "first_byte_ms": 223.4625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1008.321709,
+            "first_byte_ms": 229.664458
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 673.048458,
+            "first_byte_ms": 262.282792
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 566.744251,
+            "first_byte_ms": 258.178541
+          }
+        ],
+        "first_delivery_ms": 223.678333,
+        "longest_delivery_gap_ms": 281.581,
+        "download_samples_mbps": [
+          1.681656,
+          15.104608,
+          3.771256,
+          12.039064,
+          4.22408,
+          3.541096,
+          10.530816,
+          4.882032,
+          3.344448,
+          6.85272,
+          0.469952,
+          0.667136
+        ]
+      }
+    ],
+    "corrected_gaps_baseline-2": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 10.835405589,
+        "mib_s": 1.476640617518097,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.99,
+        "server_rss_kb": 16964,
+        "queries": 112167,
+        "cpu_per_query_us": 17.741403443080408,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.259928,
+        "download_median_mbps": 4.68336,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 654.204083,
+            "first_byte_ms": 162.721167
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 589.456542,
+            "first_byte_ms": 120.604917
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 550.858,
+            "first_byte_ms": 128.149542
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 638.993584,
+            "first_byte_ms": 127.938459
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 501.513084,
+            "first_byte_ms": 164.550292
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 749.709084,
+            "first_byte_ms": 127.824667
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1391.903709,
+            "first_byte_ms": 128.475042
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 710.553292,
+            "first_byte_ms": 162.455875
+          }
+        ],
+        "first_delivery_ms": 121.414167,
+        "longest_delivery_gap_ms": 221.867959,
+        "download_samples_mbps": [
+          1.775136,
+          15.780912,
+          1.259928,
+          11.934928,
+          4.975384,
+          3.5352,
+          12.991872,
+          3.471288,
+          2.44896,
+          4.68336,
+          4.251896
+        ]
+      }
+    ],
+    "corrected_gaps_baseline-3": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 11.280682505,
+        "mib_s": 1.4183538977281056,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.03,
+        "server_rss_kb": 16888,
+        "queries": 112485,
+        "cpu_per_query_us": 18.046850691203268,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.302024,
+        "download_median_mbps": 3.783192,
+        "stream_progress": [
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1290.481251,
+            "first_byte_ms": 225.598209
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 553.048584,
+            "first_byte_ms": 258.504084
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 590.0795,
+            "first_byte_ms": 225.454791
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1150.211167,
+            "first_byte_ms": 360.233751
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 710.897958,
+            "first_byte_ms": 225.531708
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 707.531626,
+            "first_byte_ms": 225.576375
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 628.511625,
+            "first_byte_ms": 258.412833
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1255.819459,
+            "first_byte_ms": 420.946875
+          }
+        ],
+        "first_delivery_ms": 225.851167,
+        "longest_delivery_gap_ms": 277.211875,
+        "download_samples_mbps": [
+          1.288352,
+          15.871616,
+          1.302024,
+          13.77108,
+          2.73956,
+          3.783192,
+          12.516504,
+          2.655488,
+          3.679976,
+          4.372832,
+          4.380552,
+          0.747688
+        ]
+      }
+    ],
+    "corrected_gaps_baseline-1": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 13.618748257,
+        "mib_s": 1.1748509993769833,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.32,
+        "server_rss_kb": 15884,
+        "queries": 115042,
+        "cpu_per_query_us": 20.166547869473757,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.421408,
+        "download_median_mbps": 5.2566,
+        "stream_progress": [
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 765.251584,
+            "first_byte_ms": 210.353583
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 491.040792,
+            "first_byte_ms": 210.512375
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 463.263334,
+            "first_byte_ms": 208.742625
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 712.341542,
+            "first_byte_ms": 408.121125
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 778.964125,
+            "first_byte_ms": 160.920833
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 609.435084,
+            "first_byte_ms": 115.567833
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1416.524126,
+            "first_byte_ms": 122.025708
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1519.782709,
+            "first_byte_ms": 122.014
+          }
+        ],
+        "first_delivery_ms": 116.444584,
+        "longest_delivery_gap_ms": 402.915,
+        "download_samples_mbps": [
+          1.658328,
+          11.997864,
+          5.47368,
+          10.054224,
+          5.398992,
+          6.484464,
+          8.92044,
+          5.2566,
+          4.56496,
+          5.230672,
+          0.421408,
+          0.30576,
+          0.724048,
+          0.617424
+        ]
+      }
+    ],
+    "corrected_gaps_final-1": [
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 11.441155006,
+        "mib_s": 1.398460207173947,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.47,
+        "server_rss_kb": 19008,
+        "queries": 111097,
+        "cpu_per_query_us": 13.231680423413774,
+        "server_log_errors": 0,
+        "download_p10_mbps": 3.403768,
+        "download_median_mbps": 5.78808,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 669.895167,
+            "first_byte_ms": 222.566417
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 922.379126,
+            "first_byte_ms": 321.395042
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 565.567209,
+            "first_byte_ms": 222.492459
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 609.009792,
+            "first_byte_ms": 222.55175
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1472.493375,
+            "first_byte_ms": 460.2995
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 774.288917,
+            "first_byte_ms": 259.125501
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1833.76421,
+            "first_byte_ms": 259.105792
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1023.035,
+            "first_byte_ms": 218.628125
+          }
+        ],
+        "first_delivery_ms": 218.990667,
+        "longest_delivery_gap_ms": 675.509625,
+        "download_samples_mbps": [
+          1.993584,
+          12.357504,
+          4.923016,
+          9.017888,
+          6.20036,
+          6.413456,
+          8.192656,
+          5.78808,
+          4.890824,
+          3.920496,
+          3.403768,
+          0.007232
+        ]
+      }
+    ],
+    "no_tail_variant": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 72.402052408,
+        "mib_s": 0.16013012911107694,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.26,
+        "server_rss_kb": 7472,
+        "queries": 13503,
+        "cpu_per_query_us": 167.37021402651263,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.966784,
+        "download_median_mbps": 1.365568,
+        "longest_delivery_gap_ms": 609.97975,
+        "download_samples_mbps": [
+          0.384,
+          0.908928,
+          1.413568,
+          1.373568,
+          1.326784,
+          1.429568,
+          1.181568,
+          1.014784,
+          1.573568,
+          1.461568,
+          1.485568,
+          1.229568,
+          1.717568,
+          1.317568,
+          1.581568,
+          1.134784,
+          1.836352,
+          1.390784,
+          1.540352,
+          1.342784,
+          1.453568,
+          0.966784,
+          1.445568,
+          1.045568,
+          0.926784,
+          1.365568,
+          1.469568,
+          1.318784,
+          1.237568,
+          1.429568,
+          1.909568,
+          1.461568,
+          1.573568,
+          2.028352,
+          1.221568,
+          1.054784,
+          1.229568,
+          0.830784,
+          1.341568,
+          1.453568,
+          1.414784,
+          1.429568,
+          1.461568,
+          0.910784,
+          1.141568,
+          1.134784,
+          1.421568,
+          1.812352,
+          0.942784,
+          1.374784,
+          1.285568,
+          0.837568,
+          1.198784,
+          1.733568,
+          1.788352,
+          1.094784,
+          1.069568,
+          1.262784,
+          1.029568,
+          1.318784,
+          1.317568,
+          1.701568,
+          1.565568,
+          1.844352,
+          1.717568,
+          1.717568,
+          1.788352,
+          1.158784,
+          1.197568,
+          1.269568,
+          1.318784,
+          1.365568,
+          0.219712
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 12.311664423,
+        "mib_s": 1.299580580681654,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.02,
+        "server_rss_kb": 17752,
+        "queries": 112594,
+        "cpu_per_query_us": 17.940565216619003,
+        "server_log_errors": 0,
+        "download_p10_mbps": 2.44272,
+        "download_median_mbps": 5.437792,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 607.669292
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 511.686834
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 626.369792
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 654.017292
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 535.65425
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 788.004584
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 536.948459
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 575.892375
+          }
+        ],
+        "longest_delivery_gap_ms": 271.883291,
+        "download_samples_mbps": [
+          1.229648,
+          12.167512,
+          5.437792,
+          9.3614,
+          3.418944,
+          6.414264,
+          11.633736,
+          5.472848,
+          3.305096,
+          2.44272,
+          2.613648,
+          2.952496,
+          0.65876
+        ]
+      },
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 77.022412619,
+        "mib_s": 0.15052436824265406,
+        "clean_shutdown": true,
+        "server_cpu_s": 2.19,
+        "server_rss_kb": 7456,
+        "queries": 13628,
+        "cpu_per_query_us": 160.6985617845612,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.838784,
+        "download_median_mbps": 1.301568,
+        "longest_delivery_gap_ms": 659.452501,
+        "download_samples_mbps": [
+          0.376,
+          1.076928,
+          0.806784,
+          1.053568,
+          1.022784,
+          1.325568,
+          1.565568,
+          1.214784,
+          1.485568,
+          0.894784,
+          0.837568,
+          1.310784,
+          1.581568,
+          1.373568,
+          1.405568,
+          1.181568,
+          1.110784,
+          1.133568,
+          0.870784,
+          1.198784,
+          0.854784,
+          1.357568,
+          1.421568,
+          1.821568,
+          1.293568,
+          0.942784,
+          1.349568,
+          1.461568,
+          1.461568,
+          1.501568,
+          1.373568,
+          1.030784,
+          1.365568,
+          1.637568,
+          1.373568,
+          1.533568,
+          1.197568,
+          1.190784,
+          1.261568,
+          1.230784,
+          1.005568,
+          0.798784,
+          1.461568,
+          1.525568,
+          1.437568,
+          0.862784,
+          1.334784,
+          0.989568,
+          1.198784,
+          0.838784,
+          1.277568,
+          1.389568,
+          1.094784,
+          1.868352,
+          1.477568,
+          1.285568,
+          1.102784,
+          1.533568,
+          1.749568,
+          1.557568,
+          1.261568,
+          0.998784,
+          2.004352,
+          1.413568,
+          1.301568,
+          1.230784,
+          1.381568,
+          1.213568,
+          1.318784,
+          1.692352,
+          1.757568,
+          1.517568,
+          1.365568,
+          0.702784,
+          0.774784,
+          0.798784,
+          1.242496
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 12.230392547,
+        "mib_s": 1.3082163911349396,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.86,
+        "server_rss_kb": 17340,
+        "queries": 115067,
+        "cpu_per_query_us": 16.164495467857858,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.39484,
+        "download_median_mbps": 5.908272,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 628.005417
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 532.751292
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 624.19725
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1515.820043
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1284.872292
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 903.484917
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1725.161543
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1466.705542
+          }
+        ],
+        "longest_delivery_gap_ms": 362.835667,
+        "download_samples_mbps": [
+          1.269016,
+          12.100216,
+          5.908272,
+          6.146592,
+          5.050528,
+          6.858312,
+          9.287104,
+          4.7774,
+          6.224344,
+          3.206288,
+          4.820488,
+          1.39484,
+          0.065464
+        ]
+      }
+    ],
+    "stress_dup2_batch1": [
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.927111459,
+        "mib_s": 11.713983194943449,
+        "clean_shutdown": true,
+        "server_cpu_s": 25.52,
+        "server_rss_kb": 21168,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.734864,
+        "download_median_mbps": 50.104296,
+        "stream_progress": [
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.935208,
+            "first_byte_ms": 116.419958
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 13.296792,
+            "first_byte_ms": 117.473917
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.62825,
+            "first_byte_ms": 116.464834
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 7.5715,
+            "first_byte_ms": 116.214875
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.629167,
+            "first_byte_ms": 117.099708
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.569584,
+            "first_byte_ms": 116.871875
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.834083,
+            "first_byte_ms": 117.354875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 7.485542,
+            "first_byte_ms": 116.842167
+          }
+        ],
+        "first_delivery_ms": 116.675458,
+        "longest_delivery_gap_ms": 5.686,
+        "download_samples_mbps": [
+          43.734864,
+          50.104296,
+          50.184,
+          50.846232,
+          51.3156,
+          51.729992,
+          48.219808,
+          48.060528,
+          48.38144,
+          48.659656,
+          45.634496
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.790305208,
+        "mib_s": 10.55323985930581,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.58,
+        "server_rss_kb": 7168,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.806572583,
+        "mib_s": 11.844643527528696,
+        "clean_shutdown": true,
+        "server_cpu_s": 25.4,
+        "server_rss_kb": 21824,
+        "server_log_errors": 0,
+        "download_p10_mbps": 42.600312,
+        "download_median_mbps": 50.262848,
+        "stream_progress": [
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.82875,
+            "first_byte_ms": 113.236166
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.742041,
+            "first_byte_ms": 113.163334
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.586542,
+            "first_byte_ms": 114.298375
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.536375,
+            "first_byte_ms": 114.007625
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.232583,
+            "first_byte_ms": 114.277875
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.679584,
+            "first_byte_ms": 113.308792
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.44525,
+            "first_byte_ms": 113.231458
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.065875,
+            "first_byte_ms": 113.220541
+          }
+        ],
+        "first_delivery_ms": 113.776334,
+        "longest_delivery_gap_ms": 1.911791,
+        "download_samples_mbps": [
+          42.600312,
+          49.610328,
+          49.763832,
+          50.976248,
+          50.846104,
+          50.038368,
+          50.262848,
+          50.4712,
+          50.16432,
+          51.146352,
+          40.991
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.594859542,
+        "mib_s": 11.126999409202508,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.73,
+        "server_rss_kb": 7216,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.535686542,
+        "mib_s": 12.149184534841108,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.53,
+        "server_rss_kb": 21600,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.337328,
+        "download_median_mbps": 51.353976,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.664,
+            "first_byte_ms": 110.237792
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.094042,
+            "first_byte_ms": 109.8205
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.308166,
+            "first_byte_ms": 109.71875
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.33525,
+            "first_byte_ms": 109.618416
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.365334,
+            "first_byte_ms": 113.171292
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.854583,
+            "first_byte_ms": 111.983875
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.573959,
+            "first_byte_ms": 112.068042
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.600292,
+            "first_byte_ms": 112.044
+          }
+        ],
+        "first_delivery_ms": 110.280833,
+        "longest_delivery_gap_ms": 1.203875,
+        "download_samples_mbps": [
+          43.337328,
+          50.076872,
+          51.220024,
+          52.15692,
+          50.921016,
+          51.353976,
+          51.352008,
+          51.559632,
+          53.28668,
+          52.743256,
+          28.8632
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.631680042,
+        "mib_s": 11.014186144540318,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.77,
+        "server_rss_kb": 7184,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.365236333,
+        "mib_s": 12.348970721727198,
+        "clean_shutdown": true,
+        "server_cpu_s": 23.509999999999998,
+        "server_rss_kb": 21808,
+        "server_log_errors": 0,
+        "download_p10_mbps": 44.800536,
+        "download_median_mbps": 52.635144,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 11.302625,
+            "first_byte_ms": 107.220875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 12.369,
+            "first_byte_ms": 108.794667
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 11.447833,
+            "first_byte_ms": 107.570375
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.763417,
+            "first_byte_ms": 108.814208
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.359,
+            "first_byte_ms": 108.446666
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 12.033708,
+            "first_byte_ms": 107.475458
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.763917,
+            "first_byte_ms": 108.725916
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.359875,
+            "first_byte_ms": 108.751209
+          }
+        ],
+        "first_delivery_ms": 107.5445,
+        "longest_delivery_gap_ms": 10.356209,
+        "download_samples_mbps": [
+          44.800536,
+          52.179552,
+          53.807088,
+          52.829976,
+          53.350512,
+          52.635144,
+          52.556424,
+          52.809312,
+          49.865184,
+          52.345848,
+          19.691336
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.603888875,
+        "mib_s": 11.099121362336678,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.77,
+        "server_rss_kb": 7072,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.712913042,
+        "mib_s": 11.948197422883553,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.59,
+        "server_rss_kb": 21808,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.106088,
+        "download_median_mbps": 50.929872,
+        "stream_progress": [
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.636541,
+            "first_byte_ms": 116.520625
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.200041,
+            "first_byte_ms": 115.505875
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.338417,
+            "first_byte_ms": 116.873625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.35075,
+            "first_byte_ms": 116.671334
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.183875,
+            "first_byte_ms": 116.4435
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.685333,
+            "first_byte_ms": 116.565333
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 14.127917,
+            "first_byte_ms": 116.45475
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.302417,
+            "first_byte_ms": 116.594084
+          }
+        ],
+        "first_delivery_ms": 115.870625,
+        "longest_delivery_gap_ms": 2.008458,
+        "download_samples_mbps": [
+          43.106088,
+          50.771448,
+          51.488784,
+          51.607848,
+          51.377592,
+          50.929872,
+          50.25288,
+          51.42384,
+          50.49396,
+          49.82976,
+          35.58884
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.669248459,
+        "mib_s": 10.901414948308357,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.81,
+        "server_rss_kb": 7104,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.495746708,
+        "mib_s": 12.195416253941863,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.61,
+        "server_rss_kb": 20912,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.973976,
+        "download_median_mbps": 51.520272,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.727041,
+            "first_byte_ms": 107.967042
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.647375,
+            "first_byte_ms": 108.598042
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.980292,
+            "first_byte_ms": 108.365458
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.234375,
+            "first_byte_ms": 109.817667
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.792584,
+            "first_byte_ms": 106.0975
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.804833,
+            "first_byte_ms": 109.854083
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.944375,
+            "first_byte_ms": 110.775708
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.929291,
+            "first_byte_ms": 110.776
+          }
+        ],
+        "first_delivery_ms": 106.653834,
+        "longest_delivery_gap_ms": 1.832,
+        "download_samples_mbps": [
+          43.973976,
+          52.380288,
+          51.274272,
+          50.804904,
+          52.315344,
+          52.675488,
+          53.27376,
+          51.520272,
+          51.062712,
+          51.296904,
+          26.292992
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.6085239590000002,
+        "mib_s": 11.084864740952105,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.76,
+        "server_rss_kb": 7152,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.633193958,
+        "mib_s": 12.037775338772768,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.59,
+        "server_rss_kb": 21744,
+        "server_log_errors": 0,
+        "download_p10_mbps": 44.287872,
+        "download_median_mbps": 51.055824,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.927166,
+            "first_byte_ms": 117.662125
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.359166,
+            "first_byte_ms": 119.194167
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.704958,
+            "first_byte_ms": 117.848125
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.889,
+            "first_byte_ms": 119.345958
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.786333,
+            "first_byte_ms": 118.780625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.501833,
+            "first_byte_ms": 118.834791
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.968208,
+            "first_byte_ms": 119.182542
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.551917,
+            "first_byte_ms": 118.6375
+          }
+        ],
+        "first_delivery_ms": 118.059583,
+        "longest_delivery_gap_ms": 1.639583,
+        "download_samples_mbps": [
+          44.287872,
+          50.814744,
+          51.055824,
+          51.046968,
+          51.061728,
+          51.481896,
+          51.168,
+          50.904288,
+          51.034176,
+          51.229992,
+          32.785424
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.620130959,
+        "mib_s": 11.049324030821616,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.76,
+        "server_rss_kb": 6928,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.721997875,
+        "mib_s": 11.93807362137721,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.72,
+        "server_rss_kb": 22176,
+        "server_log_errors": 0,
+        "download_p10_mbps": 40.970808,
+        "download_median_mbps": 50.859024,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.971417,
+            "first_byte_ms": 111.24325
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.220042,
+            "first_byte_ms": 109.248042
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.8945,
+            "first_byte_ms": 109.272541
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 12.296958,
+            "first_byte_ms": 112.083875
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.250166,
+            "first_byte_ms": 109.231375
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.167541,
+            "first_byte_ms": 112.494583
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.326666,
+            "first_byte_ms": 111.84725
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.497625,
+            "first_byte_ms": 112.084917
+          }
+        ],
+        "first_delivery_ms": 109.558041,
+        "longest_delivery_gap_ms": 8.241375,
+        "download_samples_mbps": [
+          40.970808,
+          50.932824,
+          51.081408,
+          50.859024,
+          51.1434,
+          51.611784,
+          50.201712,
+          50.82852,
+          50.679936,
+          50.559888,
+          38.001608
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.608087333,
+        "mib_s": 11.086206155309823,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.74,
+        "server_rss_kb": 6896,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.667262875,
+        "mib_s": 11.999329303113287,
+        "clean_shutdown": true,
+        "server_cpu_s": 23.58,
+        "server_rss_kb": 21312,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.890336,
+        "download_median_mbps": 51.456312,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.280917,
+            "first_byte_ms": 110.354917
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.224541,
+            "first_byte_ms": 110.902459
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.237292,
+            "first_byte_ms": 110.28325
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.266875,
+            "first_byte_ms": 110.653875
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.449584,
+            "first_byte_ms": 110.375584
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.061458,
+            "first_byte_ms": 110.516083
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.527375,
+            "first_byte_ms": 110.450708
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.443959,
+            "first_byte_ms": 107.22225
+          }
+        ],
+        "first_delivery_ms": 108.356833,
+        "longest_delivery_gap_ms": 3.658167,
+        "download_samples_mbps": [
+          43.890336,
+          51.484848,
+          51.456312,
+          51.90108,
+          52.178568,
+          51.208344,
+          49.548336,
+          48.528912,
+          48.84576,
+          51.749544,
+          36.078872
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.597486,
+        "mib_s": 11.118875792706351,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.74,
+        "server_rss_kb": 6880,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.648572625,
+        "mib_s": 12.020390385420319,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.94,
+        "server_rss_kb": 21680,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.634496,
+        "download_median_mbps": 51.170952,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 2.978458,
+            "first_byte_ms": 118.228625
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.007791,
+            "first_byte_ms": 118.198875
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.85025,
+            "first_byte_ms": 117.647709
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.120375,
+            "first_byte_ms": 118.257583
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.675834,
+            "first_byte_ms": 120.720083
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.046875,
+            "first_byte_ms": 121.17525
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.886875,
+            "first_byte_ms": 120.481791
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.810208,
+            "first_byte_ms": 120.481292
+          }
+        ],
+        "first_delivery_ms": 117.976583,
+        "longest_delivery_gap_ms": 1.433666,
+        "download_samples_mbps": [
+          43.634496,
+          50.216472,
+          50.8974,
+          51.378576,
+          50.625816,
+          50.627784,
+          51.40908,
+          51.170952,
+          52.344864,
+          51.203424,
+          33.362048
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.578042292,
+        "mib_s": 11.17929770965379,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.68,
+        "server_rss_kb": 7120,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.767483208,
+        "mib_s": 11.887643335714595,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.2,
+        "server_rss_kb": 17728,
+        "server_log_errors": 0,
+        "download_p10_mbps": 44.101896,
+        "download_median_mbps": 51.141432,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 35.36375,
+            "first_byte_ms": 108.391791
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 36.348584,
+            "first_byte_ms": 107.191041
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 47.365292,
+            "first_byte_ms": 107.644917
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 47.314541,
+            "first_byte_ms": 108.109041
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 36.151166,
+            "first_byte_ms": 105.937125
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 35.067833,
+            "first_byte_ms": 109.755875
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 35.470958,
+            "first_byte_ms": 109.497666
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 35.359584,
+            "first_byte_ms": 109.752667
+          }
+        ],
+        "first_delivery_ms": 106.411209,
+        "longest_delivery_gap_ms": 34.818417,
+        "download_samples_mbps": [
+          44.101896,
+          50.130864,
+          50.185968,
+          51.461232,
+          51.3894,
+          51.141432,
+          52.030968,
+          52.794552,
+          50.35128,
+          46.145664,
+          37.137656
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.591488292,
+        "mib_s": 11.137444075510297,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.7,
+        "server_rss_kb": 7200,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.69937475,
+        "mib_s": 11.963315893762857,
+        "clean_shutdown": true,
+        "server_cpu_s": 25.029999999999998,
+        "server_rss_kb": 21232,
+        "server_log_errors": 0,
+        "download_p10_mbps": 44.723784,
+        "download_median_mbps": 50.856072,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.123583,
+            "first_byte_ms": 108.446958
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.833042,
+            "first_byte_ms": 111.286833
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.8595,
+            "first_byte_ms": 111.9195
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.186417,
+            "first_byte_ms": 107.887208
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.217875,
+            "first_byte_ms": 112.394209
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.158292,
+            "first_byte_ms": 108.077417
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.21025,
+            "first_byte_ms": 109.487125
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.35425,
+            "first_byte_ms": 109.269125
+          }
+        ],
+        "first_delivery_ms": 108.50675,
+        "longest_delivery_gap_ms": 2.978875,
+        "download_samples_mbps": [
+          44.723784,
+          50.856072,
+          50.392608,
+          50.6268,
+          49.784496,
+          50.237136,
+          51.41892,
+          50.939712,
+          51.111912,
+          50.962344,
+          35.817128
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.609268666,
+        "mib_s": 11.082577580551883,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.61,
+        "server_rss_kb": 7056,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.892646209,
+        "mib_s": 11.751047224341185,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.68,
+        "server_rss_kb": 21488,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.666968,
+        "download_median_mbps": 49.387944,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.118292,
+            "first_byte_ms": 112.7925
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.45375,
+            "first_byte_ms": 114.816875
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.55925,
+            "first_byte_ms": 113.960041
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 6.868541,
+            "first_byte_ms": 112.796333
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.453291,
+            "first_byte_ms": 114.773
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.309625,
+            "first_byte_ms": 114.848708
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.356709,
+            "first_byte_ms": 115.038417
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.8985,
+            "first_byte_ms": 113.9885
+          }
+        ],
+        "first_delivery_ms": 113.162625,
+        "longest_delivery_gap_ms": 1.938458,
+        "download_samples_mbps": [
+          43.666968,
+          49.523736,
+          49.218696,
+          47.724984,
+          47.220192,
+          49.387944,
+          49.181304,
+          51.693456,
+          51.12372,
+          51.016464,
+          47.113448
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.584251583,
+        "mib_s": 11.159930901535715,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.78,
+        "server_rss_kb": 7152,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.513515375,
+        "mib_s": 12.174805042314402,
+        "clean_shutdown": true,
+        "server_cpu_s": 24.4,
+        "server_rss_kb": 22384,
+        "server_log_errors": 0,
+        "download_p10_mbps": 43.60104,
+        "download_median_mbps": 51.843024,
+        "stream_progress": [
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.52275,
+            "first_byte_ms": 112.66425
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.822958,
+            "first_byte_ms": 111.719583
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 8.385583,
+            "first_byte_ms": 112.110584
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 3.079792,
+            "first_byte_ms": 111.149417
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.797833,
+            "first_byte_ms": 110.822291
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.62175,
+            "first_byte_ms": 112.321458
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 4.460708,
+            "first_byte_ms": 111.361375
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 5.009416,
+            "first_byte_ms": 111.049959
+          }
+        ],
+        "first_delivery_ms": 111.323291,
+        "longest_delivery_gap_ms": 1.784083,
+        "download_samples_mbps": [
+          43.60104,
+          50.068872,
+          51.381528,
+          50.964312,
+          53.17536,
+          51.843024,
+          52.263192,
+          52.300584,
+          51.370704,
+          52.293696,
+          27.6086
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.651694958,
+        "mib_s": 10.953817462865965,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.84,
+        "server_rss_kb": 7200,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.615669917,
+        "mib_s": 12.057646950289968,
+        "clean_shutdown": true,
+        "server_cpu_s": 23.98,
+        "server_rss_kb": 18048,
+        "server_log_errors": 0,
+        "download_p10_mbps": 45.164616,
+        "download_median_mbps": 50.938728,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 20.248334,
+            "first_byte_ms": 116.5745
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 13.920916,
+            "first_byte_ms": 117.1155
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 20.43725,
+            "first_byte_ms": 113.715125
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 19.198667,
+            "first_byte_ms": 113.011833
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.494167,
+            "first_byte_ms": 117.181417
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 20.443709,
+            "first_byte_ms": 116.5565
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 10.29325,
+            "first_byte_ms": 116.459584
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 9.386458,
+            "first_byte_ms": 118.2585
+          }
+        ],
+        "first_delivery_ms": 113.479583,
+        "longest_delivery_gap_ms": 9.376625,
+        "download_samples_mbps": [
+          45.164616,
+          51.749544,
+          50.0364,
+          52.172664,
+          52.089024,
+          50.605152,
+          50.549064,
+          50.37096,
+          50.938728,
+          51.675744,
+          31.519016
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.597374334,
+        "mib_s": 11.119220933430944,
+        "clean_shutdown": true,
+        "server_cpu_s": 6.71,
+        "server_rss_kb": 7152,
+        "server_log_errors": 0
+      }
+    ],
+    "large_downloads_dup2_batch1": [
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 7.527581708,
+        "mib_s": 34.00826585886592,
+        "clean_shutdown": true,
+        "server_cpu_s": 8.07,
+        "server_rss_kb": 5808,
+        "server_log_errors": 0,
+        "download_p10_mbps": 211.208,
+        "download_median_mbps": 316.84,
+        "first_delivery_ms": 101.600167,
+        "longest_delivery_gap_ms": 97.132417,
+        "download_samples_mbps": [
+          211.208,
+          284.344,
+          281.208,
+          329.504,
+          328.248,
+          316.84,
+          323.048,
+          73.083648
+        ]
+      },
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 7.447406333,
+        "mib_s": 34.37438331592642,
+        "clean_shutdown": true,
+        "server_cpu_s": 8.09,
+        "server_rss_kb": 5824,
+        "server_log_errors": 0,
+        "download_p10_mbps": 261.192,
+        "download_median_mbps": 308.44,
+        "first_delivery_ms": 103.101125,
+        "longest_delivery_gap_ms": 0.888042,
+        "download_samples_mbps": [
+          261.192,
+          318.904,
+          310.384,
+          284.192,
+          293.304,
+          323.312,
+          308.44,
+          47.755648
+        ]
+      },
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 7.981654625,
+        "mib_s": 32.07355016316557,
+        "clean_shutdown": true,
+        "server_cpu_s": 8.23,
+        "server_rss_kb": 5728,
+        "server_log_errors": 0,
+        "download_p10_mbps": 223.496,
+        "download_median_mbps": 281.064,
+        "first_delivery_ms": 100.917958,
+        "longest_delivery_gap_ms": 20.298584,
+        "download_samples_mbps": [
+          223.496,
+          255.624,
+          259.48,
+          296.752,
+          287.48,
+          323.808,
+          281.064,
+          219.779648
+        ]
+      }
+    ],
+    "mixed_loss_outages_dup2_batch1": [
+      {
+        "scenario": "tcp-download-lossy",
+        "pass": true,
+        "seconds": 24.57480547,
+        "mib_s": 0.16276832811079825,
+        "clean_shutdown": true,
+        "server_cpu_s": 1.01,
+        "server_rss_kb": 7092,
+        "queries": 4734,
+        "cpu_per_query_us": 213.3502323616392,
+        "injected_query_copies": 104,
+        "injected_reply_copies": 96,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.52,
+        "download_median_mbps": 1.437568,
+        "first_delivery_ms": 210.079875,
+        "longest_delivery_gap_ms": 493.784625,
+        "download_samples_mbps": [
+          0.304,
+          0.52,
+          1.411712,
+          0.998784,
+          2.092352,
+          1.069568,
+          1.581568,
+          1.334784,
+          0.718784,
+          1.804352,
+          1.102784,
+          1.485568,
+          2.188352,
+          1.932352,
+          1.765568,
+          1.717568,
+          1.661568,
+          1.453568,
+          0.286784,
+          1.110784,
+          1.309568,
+          1.437568,
+          1.357568,
+          1.541568,
+          1.36736
+        ]
+      },
+      {
+        "scenario": "socks-echo-lossy",
+        "pass": true,
+        "seconds": 7.524512962,
+        "mib_s": 0.5315958680914822,
+        "clean_shutdown": true,
+        "server_cpu_s": 0.7,
+        "server_rss_kb": 12352,
+        "queries": 23558,
+        "cpu_per_query_us": 29.713897614398505,
+        "injected_query_copies": 463,
+        "injected_reply_copies": 467,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.094736,
+        "download_median_mbps": 1.4,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 524288,
+            "longest_gap_ms": 541.087333,
+            "first_byte_ms": 325.340042
+          },
+          {
+            "seed": 2,
+            "received_bytes": 524288,
+            "longest_gap_ms": 609.265417,
+            "first_byte_ms": 224.559542
+          },
+          {
+            "seed": 3,
+            "received_bytes": 524288,
+            "longest_gap_ms": 827.676917,
+            "first_byte_ms": 583.907959
+          },
+          {
+            "seed": 4,
+            "received_bytes": 524288,
+            "longest_gap_ms": 631.7305,
+            "first_byte_ms": 222.783583
+          }
+        ],
+        "first_delivery_ms": 223.639541,
+        "longest_delivery_gap_ms": 594.3135,
+        "download_samples_mbps": [
+          0.094736,
+          4.584752,
+          4.5278,
+          3.895848,
+          0.649536,
+          0.784,
+          1.4,
+          0.840544
+        ]
+      }
+    ]
+  }
+}
