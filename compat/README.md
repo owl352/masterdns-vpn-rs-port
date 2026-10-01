@@ -39,9 +39,10 @@ validated and how the baselines below were taken.
 
 ## Sustained path and integrity tests
 
-See [the 2026-10-01 stability evaluation](download-stability-results.md) for
-retained/rejected changes, measured results and failed acceptance gates; raw
-benchmark outcomes are in `download-stability-results.json`.
+See [the software stall recovery results](stall-recovery-results.md) for the
+confirmed duplex-stall cause, fixes and final passing stress gates. Raw outcomes
+are in `stall-recovery-results.json`. The [earlier stability evaluation](download-stability-results.md)
+preserves the initial measurements, rejected experiments and failed gates.
 
 The interop runner can simulate RTT, jitter, loss and short loss bursts without
 changing the real client's code or any user configuration. It generates its

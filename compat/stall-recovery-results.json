@@ -1,0 +1,2935 @@
+{
+  "date": "2026-10-01",
+  "branch": "stall-recovery",
+  "fix_commit": "799d6d0",
+  "diagnostic_commit": "3b5545c",
+  "notes": [
+    "Original Go client; disposable test configuration only.",
+    "Final stress results use immutable binaries. Interrupted mutable-binary series excluded.",
+    "Restoring only legacy idle gating reproduces the expected 90-second timeout.",
+    "Impaired paths use 3% loss, 0-30ms added one-way jitter and 100ms outages every 10 seconds.",
+    "Synthetic throughput is not a controlled performance comparison or the real resolver setup."
+  ],
+  "runs": {
+    "isolated_legacy_watchdog": [
+      {
+        "scenario": "stress-duplex",
+        "pass": false,
+        "error": "stream seed 6: echo read after 2805876 of 8388608 bytes: read tcp 127.0.0.1:50739->127.0.0.1:50730: i/o timeout (and 2 more stream errors)",
+        "seconds": 90.001152167,
+        "mib_s": 0,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.338496,
+        "download_median_mbps": 30.02184,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1892.452916
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1619.316167
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1921.642125
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 931.749083
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1988.895833
+          },
+          {
+            "seed": 6,
+            "received_bytes": 2805876,
+            "longest_gap_ms": 77289.5515
+          },
+          {
+            "seed": 7,
+            "received_bytes": 3841044,
+            "longest_gap_ms": 77495.0945
+          },
+          {
+            "seed": 2,
+            "received_bytes": 4909545,
+            "longest_gap_ms": 75507.849542
+          }
+        ],
+        "longest_delivery_gap_ms": 406.044709,
+        "download_samples_mbps": [
+          20.763384,
+          4.077696,
+          0.218448,
+          0.338496,
+          6.928344,
+          18.742248,
+          62.26752,
+          36.257448,
+          26.698872,
+          31.125888,
+          30.02184,
+          43.706328,
+          59.090864,
+          44.127912,
+          43.630752
+        ]
+      }
+    ],
+    "initial_fixes_stress15": [
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.812020333,
+        "mib_s": 10.836418867515677,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 25.373424,
+        "download_median_mbps": 46.708768,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 607.930334
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 604.35
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 541.060583
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 606.736875
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 609.708625
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1102.9835
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1294.935125
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1566.496167
+          }
+        ],
+        "longest_delivery_gap_ms": 401.617208,
+        "download_samples_mbps": [
+          27.368976,
+          3.919272,
+          56.088984,
+          25.373424,
+          71.639136,
+          54.757632,
+          38.333688,
+          71.217064,
+          88.412464,
+          46.708768,
+          43.294096,
+          9.757408
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.630725333,
+        "mib_s": 11.017082354436532,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.632596458,
+        "mib_s": 11.003562314067166,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 14.253304,
+        "download_median_mbps": 56.721696,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 578.364125
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 953.252125
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1048.501333
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 588.612
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 819.019375
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 842.110417
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1365.518542
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 802.379458
+          }
+        ],
+        "longest_delivery_gap_ms": 406.508458,
+        "download_samples_mbps": [
+          28.231944,
+          1.33332,
+          57.466584,
+          27.430968,
+          78.176832,
+          56.721696,
+          53.944848,
+          70.305024,
+          56.748328,
+          75.837008,
+          14.253304,
+          16.421056
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.532537792,
+        "mib_s": 11.323304195240723,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.9193125,
+        "mib_s": 10.738874410751459,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 4.053096,
+        "download_median_mbps": 60.263176,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 887.613334
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 611.824709
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 598.292917
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 928.074541
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 588.745125
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 619.378291
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 936.222791
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 595.185083
+          }
+        ],
+        "longest_delivery_gap_ms": 422.022084,
+        "download_samples_mbps": [
+          26.1006,
+          1.97784,
+          74.994576,
+          4.053096,
+          78.677688,
+          63.476856,
+          33.808272,
+          66.207456,
+          82.028336,
+          60.263176,
+          40.536304,
+          4.746712
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.531967,
+        "mib_s": 11.325134124979085,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 15.239216,
+        "mib_s": 8.399382225437318,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 3.584,
+        "download_median_mbps": 32.862648,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 521.935334
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 543.343291
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 545.210958
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 843.177084
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 587.749708
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1172.914958
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 823.277334
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 615.508583
+          }
+        ],
+        "longest_delivery_gap_ms": 510.751125,
+        "download_samples_mbps": [
+          27.113536,
+          1.708224,
+          32.862648,
+          65.887656,
+          30.817896,
+          57.1212,
+          38.5728,
+          75.858656,
+          67.909296,
+          55.07668,
+          42.298392,
+          8.795976,
+          8.077656,
+          19.803,
+          3.584,
+          1.383296
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.6486796249999998,
+        "mib_s": 10.962869890227756,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.289842584,
+        "mib_s": 10.41510492303959,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 9.53344,
+        "download_median_mbps": 54.896376,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 547.814292
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 541.209375
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1090.187083
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 560.597792
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 619.438916
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1007.31325
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1150.197
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 917.536541
+          }
+        ],
+        "longest_delivery_gap_ms": 432.353083,
+        "download_samples_mbps": [
+          26.604408,
+          1.524216,
+          54.896376,
+          57.159576,
+          51.58128,
+          57.355392,
+          52.50624,
+          79.778912,
+          59.343264,
+          61.02276,
+          24.202592,
+          9.53344,
+          1.362456
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.59501825,
+        "mib_s": 11.126508189492501,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.136553958,
+        "mib_s": 11.493681122790282,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 19.725264,
+        "download_median_mbps": 54.84632,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1097.075667
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1032.28325
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1137.684125
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1114.437
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1820.6415
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1611.319667
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1467.866792
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1064.152208
+          }
+        ],
+        "longest_delivery_gap_ms": 748.785375,
+        "download_samples_mbps": [
+          19.725264,
+          7.856256,
+          38.535408,
+          49.319064,
+          55.426752,
+          69.863016,
+          34.628928,
+          55.347176,
+          54.84632,
+          77.535264,
+          62.905344,
+          10.88212
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.526031458,
+        "mib_s": 11.344198279696688,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.241335,
+        "mib_s": 9.666699014865193,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 4.608,
+        "download_median_mbps": 32.788976,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 554.61075
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 542.728458
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 540.036
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 534.777083
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 546.645542
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1617.615167
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 908.237417
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1062.137083
+          }
+        ],
+        "longest_delivery_gap_ms": 376.261,
+        "download_samples_mbps": [
+          27.554952,
+          2.280912,
+          65.589504,
+          27.66024,
+          65.486184,
+          41.655672,
+          52.58896,
+          100.457544,
+          18.65172,
+          77.718544,
+          32.788976,
+          18.508568,
+          4.608,
+          1.321136
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.487861542,
+        "mib_s": 11.468345150267435,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.797161167,
+        "mib_s": 10.00221833027103,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 8.748744,
+        "download_median_mbps": 52.880344,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 543.384292
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 544.962875
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 551.957042
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 603.189833
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 606.742917
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 723.182917
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1346.7155
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 688.477375
+          }
+        ],
+        "longest_delivery_gap_ms": 594.67325,
+        "download_samples_mbps": [
+          25.915424,
+          1.598016,
+          54.4644,
+          40.6638,
+          67.780688,
+          52.880344,
+          66.3462,
+          84.924896,
+          42.445824,
+          64.474488,
+          8.94948,
+          8.748744,
+          17.678608
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.583863875,
+        "mib_s": 11.161138200317387,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.575504709,
+        "mib_s": 12.103441256195463,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 2.699112,
+        "download_median_mbps": 61.909344,
+        "stream_progress": [
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 529.875916
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 532.126709
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 529.252625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 619.518875
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 570.216209
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1079.98325
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 608.81075
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1287.551917
+          }
+        ],
+        "longest_delivery_gap_ms": 529.008833,
+        "download_samples_mbps": [
+          26.65656,
+          2.699112,
+          62.42004,
+          17.781864,
+          61.909344,
+          78.682608,
+          48.31576,
+          68.149624,
+          81.047224,
+          53.820992,
+          35.387784
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.551544292,
+        "mib_s": 11.262706223346742,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.363070834,
+        "mib_s": 11.26456059897162,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 26.865168,
+        "download_median_mbps": 46.108272,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 557.713333
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1013.789458
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1044.556709
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1207.53775
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 975.595208
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1228.133083
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1083.461416
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 921.98375
+          }
+        ],
+        "longest_delivery_gap_ms": 418.921958,
+        "download_samples_mbps": [
+          26.865168,
+          1.850904,
+          67.095024,
+          30.148776,
+          63.729744,
+          43.150368,
+          46.108272,
+          62.926928,
+          28.824312,
+          70.693576,
+          70.680848,
+          24.796992
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.535716292,
+        "mib_s": 11.313124893675717,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.462270667,
+        "mib_s": 9.508054262626422,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 13.006512,
+        "download_median_mbps": 41.966616,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1014.152292
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 796.130667
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 659.339625
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1011.960833
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1140.130541
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 584.887
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1562.68825
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1388.714875
+          }
+        ],
+        "longest_delivery_gap_ms": 616.725625,
+        "download_samples_mbps": [
+          28.5852,
+          1.306752,
+          71.845776,
+          41.966616,
+          42.004008,
+          44.119608,
+          40.258392,
+          77.346336,
+          58.88768,
+          71.565392,
+          29.611704,
+          13.006512,
+          14.690072,
+          1.676864
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.556898,
+        "mib_s": 11.245754024995938,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.796214708,
+        "mib_s": 11.856007263837753,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 2.982504,
+        "download_median_mbps": 50.19876,
+        "stream_progress": [
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 572.012833
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 709.481625
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 938.839875
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1451.042042
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 582.577375
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 705.387416
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 883.182541
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1360.647792
+          }
+        ],
+        "longest_delivery_gap_ms": 398.079417,
+        "download_samples_mbps": [
+          26.795304,
+          2.982504,
+          50.19876,
+          43.323552,
+          45.915408,
+          53.409176,
+          56.740192,
+          88.143488,
+          14.701272,
+          101.616448,
+          53.044808
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.518100375,
+        "mib_s": 11.369772245341352,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 10.856257625,
+        "mib_s": 11.790435011899417,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 4.502784,
+        "download_median_mbps": 49.59852,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 573.446083
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 589.041167
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1114.38925
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 580.634167
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1108.151042
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1162.431875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 594.7935
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 872.596541
+          }
+        ],
+        "longest_delivery_gap_ms": 434.035625,
+        "download_samples_mbps": [
+          26.452872,
+          4.502784,
+          34.95168,
+          32.267328,
+          50.807856,
+          49.59852,
+          76.303296,
+          48.709968,
+          89.129008,
+          63.110808,
+          61.036792
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.569677834,
+        "mib_s": 11.205493005282785,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.705117625,
+        "mib_s": 10.93538775950575,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 18.423432,
+        "download_median_mbps": 37.885048,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 621.280042
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 589.124334
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 657.410667
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1048.545667
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1345.456666
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 737.075375
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1452.101333
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1472.393959
+          }
+        ],
+        "longest_delivery_gap_ms": 424.215417,
+        "download_samples_mbps": [
+          28.099104,
+          2.0418,
+          33.674448,
+          63.267264,
+          18.423432,
+          45.079992,
+          72.810096,
+          37.885048,
+          63.685128,
+          76.050872,
+          32.382456,
+          63.471272
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.530520625,
+        "mib_s": 11.32977377805292,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.354489375,
+        "mib_s": 10.36060626342155,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 6.606576,
+        "download_median_mbps": 43.74372,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1153.739875
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 654.508
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 837.7995
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1363.225375
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1374.883125
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1294.170041
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1188.832833
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 987.909333
+          }
+        ],
+        "longest_delivery_gap_ms": 378.7255,
+        "download_samples_mbps": [
+          26.261976,
+          1.430736,
+          60.529776,
+          43.74372,
+          42.62688,
+          6.606576,
+          84.183168,
+          19.556016,
+          42.427128,
+          92.886776,
+          45.84672,
+          46.643632,
+          24.127808
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.516216459,
+        "mib_s": 11.37586393397859,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      }
+    ],
+    "final_pinned_stress15": [
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 14.061593166,
+        "mib_s": 9.10280922573521,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 4.608,
+        "download_median_mbps": 43.529208,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 591.885542
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 528.187584
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 561.487
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 638.2255
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1500.931917
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 843.211375
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1563.31025
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1501.461042
+          }
+        ],
+        "longest_delivery_gap_ms": 435.48475,
+        "download_samples_mbps": [
+          26.560128,
+          2.673528,
+          34.065096,
+          59.02524,
+          43.529208,
+          46.07088,
+          54.994776,
+          55.167104,
+          75.12256,
+          22.028808,
+          57.301464,
+          43.223248,
+          12.168864,
+          4.608,
+          0.332008
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.561021291,
+        "mib_s": 11.232732615526505,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.314142708,
+        "mib_s": 10.39455226686983,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 11.385864,
+        "download_median_mbps": 49.610392,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 496.752917
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 612.591167
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1011.402542
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1017.661583
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1027.645625
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 977.686667
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 723.659084
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 839.030708
+          }
+        ],
+        "longest_delivery_gap_ms": 405.454875,
+        "download_samples_mbps": [
+          26.456808,
+          7.265856,
+          57.900528,
+          21.832992,
+          63.004536,
+          11.385864,
+          50.476248,
+          49.610392,
+          72.135136,
+          45.373224,
+          40.086192,
+          78.878312,
+          12.464824
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.646215916,
+        "mib_s": 10.97027738386955,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.354356167,
+        "mib_s": 11.273206346302207,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 25.560384,
+        "download_median_mbps": 53.882984,
+        "stream_progress": [
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 542.552083
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 516.108875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 800.267875
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 582.018
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 593.3245
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 835.058875
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1252.489125
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 665.240792
+          }
+        ],
+        "longest_delivery_gap_ms": 406.589833,
+        "download_samples_mbps": [
+          25.560384,
+          2.503296,
+          54.53328,
+          44.12256,
+          47.956224,
+          55.15812,
+          66.177016,
+          58.442776,
+          47.380648,
+          53.882984,
+          59.713056,
+          21.440568
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.609135375,
+        "mib_s": 11.082986877431829,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.095151584,
+        "mib_s": 10.582752858535816,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 20.84112,
+        "download_median_mbps": 50.403432,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 600.141875
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 838.202875
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1046.470791
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 863.17
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1600.801834
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 994.338667
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1068.172542
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 738.016709
+          }
+        ],
+        "longest_delivery_gap_ms": 384.26,
+        "download_samples_mbps": [
+          26.793336,
+          1.437624,
+          50.403432,
+          29.90868,
+          57.326856,
+          20.84112,
+          50.309952,
+          60.165696,
+          33.290752,
+          55.220176,
+          77.865952,
+          66.355184,
+          6.952152
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.901411416,
+        "mib_s": 10.252699788583383,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.823376042,
+        "mib_s": 9.259677202666959,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 9.068544,
+        "download_median_mbps": 44.53092,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 675.81725
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 933.351417
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1003.54125
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 871.205959
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1147.692084
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 675.831875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 675.723041
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1063.427375
+          }
+        ],
+        "longest_delivery_gap_ms": 437.525208,
+        "download_samples_mbps": [
+          26.556192,
+          0.94956,
+          10.220808,
+          59.716992,
+          44.53092,
+          63.043896,
+          13.974768,
+          87.846664,
+          9.068544,
+          64.397944,
+          63.987616,
+          60.871208,
+          22.704104,
+          9.001696
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.658361625,
+        "mib_s": 10.933856217672304,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.225934208,
+        "mib_s": 9.67795529502758,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 11.948712,
+        "download_median_mbps": 39.9504,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 475.398458
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 522.438833
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 573.011375
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1348.40025
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1391.138375
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1384.388375
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1029.222125
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1463.562833
+          }
+        ],
+        "longest_delivery_gap_ms": 433.359416,
+        "download_samples_mbps": [
+          28.630464,
+          1.772184,
+          50.156448,
+          39.9504,
+          38.377968,
+          73.599264,
+          35.89632,
+          15.026664,
+          59.584344,
+          43.70928,
+          55.839048,
+          11.948712,
+          70.175072,
+          12.204744
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.7521645,
+        "mib_s": 10.660513418321612,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.049039458,
+        "mib_s": 10.623253450715026,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 19.100424,
+        "download_median_mbps": 53.2836,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 712.841041
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 572.694958
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 735.536792
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 738.733834
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1148.327166
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1301.973917
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 636.5185
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 823.924334
+          }
+        ],
+        "longest_delivery_gap_ms": 560.801792,
+        "download_samples_mbps": [
+          23.948592,
+          0.738,
+          19.100424,
+          65.414352,
+          43.238928,
+          32.755392,
+          53.2836,
+          71.92456,
+          21.835232,
+          62.248224,
+          59.615176,
+          78.154392,
+          4.61404
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.749558333,
+        "mib_s": 10.66792311189255,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.330444292,
+        "mib_s": 11.296997425809328,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 27.306,
+        "download_median_mbps": 51.07852,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 543.160625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 441.008916
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 650.248708
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 801.76375
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 700.19275
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 584.853417
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 957.237917
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 597.755
+          }
+        ],
+        "longest_delivery_gap_ms": 360.408416,
+        "download_samples_mbps": [
+          27.306,
+          3.209808,
+          68.223672,
+          29.596752,
+          42.312,
+          54.136728,
+          40.03804,
+          51.07852,
+          67.825152,
+          57.893144,
+          72.72616,
+          22.524936
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.604512875,
+        "mib_s": 11.097199923304476,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 11.539639709,
+        "mib_s": 11.092200729644116,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 26.950776,
+        "download_median_mbps": 47.327448,
+        "stream_progress": [
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 558.476833
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 447.758083
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 606.619917
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 651.867625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 697.053958
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1019.93425
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 754.682833
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1327.889542
+          }
+        ],
+        "longest_delivery_gap_ms": 442.853958,
+        "download_samples_mbps": [
+          26.950776,
+          2.529864,
+          53.46072,
+          41.753088,
+          41.237472,
+          32.000664,
+          57.400656,
+          62.872808,
+          47.327448,
+          57.820888,
+          77.127032,
+          36.389496
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.606414125,
+        "mib_s": 11.091349638056334,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 14.35997125,
+        "mib_s": 8.913666871025248,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 18.191272,
+        "download_median_mbps": 37.407744,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 796.25725
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 621.103583
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1562.048417
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 970.379792
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1149.20725
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 837.224541
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1124.919625
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1444.344083
+          }
+        ],
+        "longest_delivery_gap_ms": 484.570666,
+        "download_samples_mbps": [
+          26.341096,
+          2.54364,
+          44.086152,
+          34.408512,
+          48.790656,
+          23.411328,
+          37.407744,
+          44.647032,
+          43.924776,
+          61.495144,
+          33.085096,
+          76.075784,
+          18.191272,
+          35.34436,
+          7.11832
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.647273417,
+        "mib_s": 10.967096629926168,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.027617417,
+        "mib_s": 9.825280855497816,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 16.586304,
+        "download_median_mbps": 41.745216,
+        "stream_progress": [
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 599.036583
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 538.7055
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 578.735625
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 597.09
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 802.969583
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 613.805542
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1564.643958
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 727.352
+          }
+        ],
+        "longest_delivery_gap_ms": 447.296542,
+        "download_samples_mbps": [
+          26.384392,
+          2.690256,
+          41.745216,
+          31.321704,
+          55.067592,
+          39.124824,
+          56.468808,
+          57.347584,
+          46.114304,
+          63.334176,
+          41.158816,
+          54.915264,
+          16.586304,
+          4.611672
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 5.640863709,
+        "mib_s": 7.091112649323541,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.611885541,
+        "mib_s": 10.14915649082642,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 9.139392,
+        "download_median_mbps": 52.0526,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1235.026333
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 941.14425
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1558.315292
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 806.2465
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 922.952333
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1573.819833
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1981.700042
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1635.052084
+          }
+        ],
+        "longest_delivery_gap_ms": 619.398417,
+        "download_samples_mbps": [
+          27.789144,
+          0.01476,
+          15.135888,
+          77.038344,
+          9.139392,
+          82.176792,
+          22.078992,
+          66.524368,
+          65.653592,
+          66.132672,
+          42.16932,
+          52.0526,
+          10.965048
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.797419416,
+        "mib_s": 10.533469079413376,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.917471291,
+        "mib_s": 9.197073040328357,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 14.470704,
+        "download_median_mbps": 44.035968,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 563.760333
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 637.487167
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 870.62
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 658.485875
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1438.8355
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1318.796375
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1444.468042
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1408.082833
+          }
+        ],
+        "longest_delivery_gap_ms": 425.146,
+        "download_samples_mbps": [
+          25.383264,
+          1.186704,
+          14.470704,
+          64.310304,
+          19.99488,
+          58.447632,
+          46.668168,
+          58.597328,
+          62.747712,
+          44.035968,
+          31.544088,
+          63.66112,
+          27.670144,
+          18.152896
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.748967542,
+        "mib_s": 10.669604244869186,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.033862167,
+        "mib_s": 9.820573392595705,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 16.946448,
+        "download_median_mbps": 46.22832,
+        "stream_progress": [
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 559.94425
+          },
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 559.425792
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 560.793625
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 564.245208
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 928.716
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1424.959542
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1392.706791
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 616.166625
+          }
+        ],
+        "longest_delivery_gap_ms": 559.405833,
+        "download_samples_mbps": [
+          27.459504,
+          3.578808,
+          47.206416,
+          46.22832,
+          56.945064,
+          41.217792,
+          65.724312,
+          65.309128,
+          30.82596,
+          51.101088,
+          64.143696,
+          18.806712,
+          16.946448,
+          1.377664
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.6657022919999998,
+        "mib_s": 10.911960877809333,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      },
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 12.018057708,
+        "mib_s": 10.650639488508602,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 4.090488,
+        "download_median_mbps": 37.129512,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 689.64075
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1056.992542
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 692.022625
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1316.979542
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 691.544
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 693.372041
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1720.810292
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 1615.13575
+          }
+        ],
+        "longest_delivery_gap_ms": 407.904583,
+        "download_samples_mbps": [
+          26.005152,
+          0.961368,
+          4.090488,
+          64.946952,
+          27.524448,
+          71.274072,
+          32.11284,
+          73.932904,
+          29.594784,
+          87.803432,
+          37.129512,
+          79.640056,
+          1.854904
+        ]
+      },
+      {
+        "scenario": "stress-upload-eof",
+        "pass": true,
+        "seconds": 3.823607875,
+        "mib_s": 10.461323783103675,
+        "clean_shutdown": true,
+        "server_log_errors": 0
+      }
+    ],
+    "final_pinned_downloads": [
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 5.339626,
+        "mib_s": 47.94343274229319,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 348.96,
+        "download_median_mbps": 382.752,
+        "longest_delivery_gap_ms": 100.969167,
+        "download_samples_mbps": [
+          513.6,
+          524.736,
+          348.96,
+          352.608,
+          382.752,
+          24.827648
+        ]
+      },
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 4.064594625,
+        "mib_s": 62.98291062666551,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 540.48,
+        "download_median_mbps": 556.288,
+        "longest_delivery_gap_ms": 101.002584,
+        "download_samples_mbps": [
+          540.48,
+          591.36,
+          556.288,
+          459.355648
+        ]
+      },
+      {
+        "scenario": "stress-download",
+        "pass": true,
+        "seconds": 4.1560765,
+        "mib_s": 61.59655627128134,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 504.992,
+        "download_median_mbps": 569.44,
+        "longest_delivery_gap_ms": 100.992084,
+        "download_samples_mbps": [
+          504.992,
+          588.736,
+          569.44,
+          484.315648
+        ]
+      }
+    ],
+    "final_diagnostic_enabled": [
+      {
+        "scenario": "stress-duplex",
+        "pass": true,
+        "seconds": 13.760635333,
+        "mib_s": 9.301896090003739,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 13.018384,
+        "download_median_mbps": 44.181728,
+        "stream_progress": [
+          {
+            "seed": 8,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 550.181792
+          },
+          {
+            "seed": 6,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 550.163458
+          },
+          {
+            "seed": 7,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 559.904042
+          },
+          {
+            "seed": 2,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 700.194709
+          },
+          {
+            "seed": 4,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 565.024833
+          },
+          {
+            "seed": 3,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 598.56675
+          },
+          {
+            "seed": 5,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 623.731709
+          },
+          {
+            "seed": 1,
+            "received_bytes": 8388608,
+            "longest_gap_ms": 727.232458
+          }
+        ],
+        "longest_delivery_gap_ms": 550.0365,
+        "download_samples_mbps": [
+          25.459032,
+          2.929368,
+          31.373856,
+          63.490632,
+          51.446472,
+          36.503448,
+          62.860872,
+          44.181728,
+          58.680904,
+          66.034336,
+          55.173008,
+          13.018384,
+          16.165152,
+          9.55372
+        ]
+      }
+    ],
+    "final_path_100ms": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 64.260693333,
+        "mib_s": 0.31755415233779793,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.056,
+        "download_median_mbps": 2.848,
+        "longest_delivery_gap_ms": 968.935791,
+        "download_samples_mbps": [
+          0.8,
+          1.984,
+          2.304,
+          2.464,
+          2.848,
+          2.72,
+          0.32,
+          1.824,
+          2.24,
+          2.048,
+          2.432,
+          2.784,
+          2.88,
+          3.68,
+          4.128,
+          3.84,
+          0.864,
+          1.696,
+          2.56,
+          3.008,
+          2.56,
+          2.944,
+          2.848,
+          2.784,
+          2.976,
+          3.808,
+          0.736,
+          2.4,
+          2.08,
+          1.888,
+          2.88,
+          3.584,
+          3.232,
+          4.736,
+          3.584,
+          2.272,
+          0.928,
+          1.792,
+          3.296,
+          3.68,
+          2.336,
+          3.456,
+          3.232,
+          5.472,
+          3.872,
+          3.104,
+          0.416,
+          1.216,
+          2.176,
+          2.848,
+          2.688,
+          2.912,
+          3.616,
+          3.328,
+          3.424,
+          2.656,
+          1.056,
+          2.208,
+          3.136,
+          2.848,
+          3.168,
+          3.072,
+          2.816,
+          3.392,
+          0.300032
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 5.068029709,
+        "mib_s": 3.157045423705112,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.68252,
+        "download_median_mbps": 16.850024,
+        "stream_progress": [
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 605.129041
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 568.876709
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 573.714875
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1083.234917
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 580.267708
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 603.286834
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 587.974208
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 722.040083
+          }
+        ],
+        "longest_delivery_gap_ms": 722.040042,
+        "download_samples_mbps": [
+          0.68252,
+          28.80008,
+          16.850024,
+          17.022352,
+          3.27844,
+          0.475448
+        ]
+      }
+    ],
+    "final_path_200ms": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 64.743756292,
+        "mib_s": 0.26595228615315325,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.12,
+        "download_median_mbps": 2.304,
+        "longest_delivery_gap_ms": 1449.0865,
+        "download_samples_mbps": [
+          0.352,
+          0.96,
+          1.952,
+          2.4,
+          2.144,
+          0.896,
+          1.632,
+          1.664,
+          1.184,
+          2.464,
+          2.624,
+          2.56,
+          2.24,
+          1.92,
+          2.688,
+          1.504,
+          1.216,
+          1.632,
+          3.104,
+          2.976,
+          2.944,
+          2.08,
+          3.04,
+          3.808,
+          2.688,
+          1.664,
+          1.344,
+          2.24,
+          2.592,
+          2.304,
+          3.136,
+          3.04,
+          2.176,
+          3.104,
+          3.008,
+          0.224,
+          2.592,
+          1.536,
+          2.624,
+          2.112,
+          2.4,
+          2.208,
+          2.208,
+          2.592,
+          3.168,
+          0.352,
+          2.08,
+          1.536,
+          1.472,
+          1.76,
+          3.296,
+          2.944,
+          2.88,
+          3.392,
+          2.976,
+          1.088,
+          1.12,
+          1.664,
+          2.336,
+          2.56,
+          3.328,
+          2.944,
+          2.24,
+          3.392,
+          2.137344
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 5.081527875,
+        "mib_s": 3.148659299640268,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.60784,
+        "download_median_mbps": 16.608416,
+        "stream_progress": [
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 487.59475
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 583.138125
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1170.456625
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 979.968667
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 635.835542
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 816.458166
+          },
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 528.433875
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 814.960625
+          }
+        ],
+        "longest_delivery_gap_ms": 459.60475,
+        "download_samples_mbps": [
+          0.60784,
+          10.380048,
+          21.91236,
+          17.395464,
+          16.608416,
+          0.204736
+        ]
+      }
+    ],
+    "final_path_300ms": [
+      {
+        "scenario": "tcp-download",
+        "pass": true,
+        "seconds": 67.049277542,
+        "mib_s": 0.27172179429655574,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 1.024,
+        "download_median_mbps": 2.336,
+        "longest_delivery_gap_ms": 782.229208,
+        "download_samples_mbps": [
+          0.16,
+          0.576,
+          1.024,
+          1.12,
+          0.736,
+          0.096,
+          2.24,
+          1.92,
+          1.984,
+          1.92,
+          1.536,
+          3.2,
+          1.568,
+          3.488,
+          1.728,
+          1.376,
+          1.696,
+          3.552,
+          2.4,
+          3.968,
+          2.56,
+          3.68,
+          2.336,
+          3.84,
+          3.104,
+          0.768,
+          1.952,
+          2.112,
+          2.752,
+          2.72,
+          2.912,
+          1.92,
+          3.456,
+          3.04,
+          2.016,
+          1.056,
+          2.592,
+          2.176,
+          1.92,
+          2.944,
+          2.88,
+          3.2,
+          2.624,
+          2.464,
+          3.232,
+          0.928,
+          1.856,
+          2.304,
+          2.784,
+          2.912,
+          3.52,
+          2.336,
+          3.392,
+          2.912,
+          2.528,
+          1.248,
+          2.048,
+          1.952,
+          2.304,
+          1.984,
+          2.432,
+          3.232,
+          3.296,
+          3.008,
+          3.136,
+          1.888,
+          0.285952
+        ]
+      },
+      {
+        "scenario": "socks-echo-multi",
+        "pass": true,
+        "seconds": 8.386521666,
+        "mib_s": 1.9078231282542304,
+        "clean_shutdown": true,
+        "server_log_errors": 0,
+        "download_p10_mbps": 0.000928,
+        "download_median_mbps": 3.91544,
+        "stream_progress": [
+          {
+            "seed": 1,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1013.117125
+          },
+          {
+            "seed": 7,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1022.582667
+          },
+          {
+            "seed": 8,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1010.074875
+          },
+          {
+            "seed": 5,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1021.20975
+          },
+          {
+            "seed": 6,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 746.472875
+          },
+          {
+            "seed": 2,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1030.6405
+          },
+          {
+            "seed": 4,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1035.011458
+          },
+          {
+            "seed": 3,
+            "received_bytes": 1048576,
+            "longest_gap_ms": 1544.993875
+          }
+        ],
+        "longest_delivery_gap_ms": 747.088709,
+        "download_samples_mbps": [
+          0.000928,
+          12.005312,
+          18.200288,
+          25.432408,
+          3.91544,
+          1.983504,
+          2.335416,
+          1.882032,
+          1.353536
+        ]
+      }
+    ]
+  },
+  "release_sha256": "517d0482edc45f0a8c1f81f9061a4cf0051945726aeb4143dbf6f762734fa0bc",
+  "gates": {
+    "workspace_offline": "passed",
+    "go_race_detector": "passed",
+    "rust_wire_to_go_cases": 118,
+    "macos_routine": "9/9 passed",
+    "linux_routine": "9/9 passed",
+    "linux_stress": "9/9 passed",
+    "linux_stress_output": "stress-duplex        PASS    5.22s    24.52 MiB/s  shutdown=true  log-errors=0\nstress-upload-eof    PASS   19.50s     2.05 MiB/s  shutdown=true  log-errors=0\nstress-download      PASS    5.43s    47.19 MiB/s  shutdown=true  log-errors=0\nstress-duplex        PASS    4.83s    26.50 MiB/s  shutdown=true  log-errors=0\nstress-upload-eof    PASS   20.05s     1.99 MiB/s  shutdown=true  log-errors=0\nstress-download      PASS    6.54s    39.13 MiB/s  shutdown=true  log-errors=0\nstress-duplex        PASS    5.35s    23.93 MiB/s  shutdown=true  log-errors=0\nstress-upload-eof    PASS   17.79s     2.25 MiB/s  shutdown=true  log-errors=0\nstress-download      PASS    5.19s    49.32 MiB/s  shutdown=true  log-errors=0\n\n9 scenarios, 0 failed. Logs: /tmp/stall-linux-stress\n"
+  }
+}
