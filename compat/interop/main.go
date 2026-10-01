@@ -67,32 +67,45 @@ type Result struct {
 	ServerRSSKB          int              `json:"server_rss_kb,omitempty"`
 	Queries              int64            `json:"queries,omitempty"`
 	CPUPerQueryUs        float64          `json:"cpu_per_query_us,omitempty"`
+	InjectedQueryCopies  int64            `json:"injected_query_copies,omitempty"`
+	InjectedReplyCopies  int64            `json:"injected_reply_copies,omitempty"`
 	LogErrors            int              `json:"server_log_errors"`
 	DownloadP10Mbps      float64          `json:"download_p10_mbps,omitempty"`
 	DownloadMedianMbps   float64          `json:"download_median_mbps,omitempty"`
 	StreamProgress       []StreamProgress `json:"stream_progress,omitempty"`
+	FirstDeliveryMs      float64          `json:"first_delivery_ms,omitempty"`
 	LongestDeliveryGapMs float64          `json:"longest_delivery_gap_ms,omitempty"`
 	DownloadSamplesMbps  []float64        `json:"download_samples_mbps,omitempty"`
 }
 
 var (
-	sustained   = flag.Duration("sustained", 0, "generate continuous download traffic for this duration instead of fixed bytes")
-	repeat      = flag.Int("repeat", 1, "repeat selected scenarios with fresh server/client sessions")
-	serverBin   = flag.String("server-bin", "", "server binary under test (Rust port or Go reference)")
-	clientBin   = flag.String("client-bin", "", "Go client binary")
-	scenarios   = flag.String("scenarios", "all", "comma-separated scenario names, 'all', 'quick' or 'load'")
-	workDir     = flag.String("work", "", "directory for configs and logs (default: temp)")
-	socksHost   = flag.String("socks-host", "", "hostname the SOCKS5 tests connect to; must resolve to this machine and not be an IP literal (default: <LocalHostName>.local or $COMPAT_SOCKS_HOST)")
-	jsonOut     = flag.String("json", "", "write results as JSON to this file")
-	scale       = flag.Float64("scale", 1, "multiply transfer sizes")
-	timeoutSec  = flag.Int("timeout", 180, "per-scenario timeout in seconds")
-	logLevel    = flag.String("log-level", "INFO", "LOG_LEVEL for the server and clients")
-	pathRTT     = flag.Duration("path-rtt", 0, "simulated RTT, each direction gets half")
-	pathJitter  = flag.Duration("path-jitter", 0, "additional random one-way delay")
-	pathLoss    = flag.Float64("path-loss", 0, "independent datagram loss probability")
-	burstEvery  = flag.Duration("burst-every", 0, "period between simulated loss bursts")
-	burstLength = flag.Duration("burst-length", 0, "duration of simulated loss bursts")
-	allowSkip   = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
+	testMaxRTO      = flag.Float64("max-rto", 1, "test server/client maximum RTO")
+	clientDup       = flag.Int("client-dup", 1, "test client packet duplication")
+	setupDup        = flag.Int("client-setup-dup", 1, "test client setup duplication")
+	batchLimit      = flag.Int("batch", 0, "override test server/client packed-block limit (0 preserves defaults)")
+	testWindow      = flag.Int("window", 4096, "test server/client ARQ window")
+	testMTU         = flag.Int("download-mtu", 4000, "test client maximum download MTU")
+	testRTO         = flag.Float64("rto", 0.25, "test server/client initial RTO")
+	testCompression = flag.Int("compression", 0, "test upload/download compression type")
+	slowRTT         = flag.Duration("slow-rtt", 0, "RTT for slow DNS-id reply groups")
+	slowShare       = flag.Float64("slow-share", 0.2, "share of DNS ids assigned to slow groups")
+	sustained       = flag.Duration("sustained", 0, "generate continuous download traffic for this duration instead of fixed bytes")
+	repeat          = flag.Int("repeat", 1, "repeat selected scenarios with fresh server/client sessions")
+	serverBin       = flag.String("server-bin", "", "server binary under test (Rust port or Go reference)")
+	clientBin       = flag.String("client-bin", "", "Go client binary")
+	scenarios       = flag.String("scenarios", "all", "comma-separated scenario names, 'all', 'quick' or 'load'")
+	workDir         = flag.String("work", "", "directory for configs and logs (default: temp)")
+	socksHost       = flag.String("socks-host", "", "hostname the SOCKS5 tests connect to; must resolve to this machine and not be an IP literal (default: <LocalHostName>.local or $COMPAT_SOCKS_HOST)")
+	jsonOut         = flag.String("json", "", "write results as JSON to this file")
+	scale           = flag.Float64("scale", 1, "multiply transfer sizes")
+	timeoutSec      = flag.Int("timeout", 180, "per-scenario timeout in seconds")
+	logLevel        = flag.String("log-level", "INFO", "LOG_LEVEL for the server and clients")
+	pathRTT         = flag.Duration("path-rtt", 0, "simulated RTT, each direction gets half")
+	pathJitter      = flag.Duration("path-jitter", 0, "additional random one-way delay")
+	pathLoss        = flag.Float64("path-loss", 0, "independent datagram loss probability")
+	burstEvery      = flag.Duration("burst-every", 0, "period between simulated loss bursts")
+	burstLength     = flag.Duration("burst-length", 0, "duration of simulated loss bursts")
+	allowSkip       = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
 )
 
 func allScenarios() []Scenario {
@@ -153,7 +166,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "need -server-bin and -client-bin")
 		os.Exit(2)
 	}
-	if *repeat < 1 || *sustained < 0 || *pathRTT < 0 || *pathJitter < 0 || *pathLoss < 0 || *pathLoss > 1 || *burstLength < 0 || *burstEvery < 0 || (*burstLength > 0 && (*burstEvery == 0 || *burstLength >= *burstEvery)) {
+	if *clientDup < 1 || *setupDup < 1 || *batchLimit < 0 || *testWindow < 300 || *testMTU < 100 || *testRTO <= 0 || *testRTO > *testMaxRTO || *testCompression < 0 || *testCompression > 3 || *slowRTT < 0 || *slowShare < 0 || *slowShare > 1 || *repeat < 1 || *sustained < 0 || *pathRTT < 0 || *pathJitter < 0 || *pathLoss < 0 || *pathLoss > 1 || *burstLength < 0 || *burstEvery < 0 || (*burstLength > 0 && (*burstEvery == 0 || *burstLength >= *burstEvery)) {
 		fmt.Fprintln(os.Stderr, "invalid repeat, duration, loss or burst settings")
 		os.Exit(2)
 	}
@@ -309,7 +322,7 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 
 	resolverPort := serverPort
 	var proxy *udpProxy
-	if sc.Impair != nil || *pathRTT > 0 || *pathJitter > 0 || *pathLoss > 0 || *burstEvery > 0 {
+	if sc.Impair != nil || *pathRTT > 0 || *pathJitter > 0 || *pathLoss > 0 || *burstEvery > 0 || *slowRTT > 0 {
 		impairment := Impair{}
 		if sc.Impair != nil {
 			impairment = *sc.Impair
@@ -347,9 +360,10 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	}
 
 	cpuBefore, _ := procCPUSeconds(server.cmd.Process.Pid)
-	var queriesBefore int64
+	var queriesBefore, queryCopiesBefore, replyCopiesBefore int64
 	if proxy != nil {
 		queriesBefore = proxy.upstream.Load()
+		queryCopiesBefore, replyCopiesBefore = proxy.queryCopies.Load(), proxy.replyCopies.Load()
 	}
 
 	start := time.Now()
@@ -357,13 +371,17 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	moved, err := runWork(sc, targets, listenPorts, host, targetPort, meter)
 	meter.finish(&res)
 	res.Seconds = time.Since(start).Seconds()
+	if proxy != nil {
+		res.InjectedQueryCopies = proxy.queryCopies.Load() - queryCopiesBefore
+		res.InjectedReplyCopies = proxy.replyCopies.Load() - replyCopiesBefore
+	}
 	if err != nil {
 		res.Error = err.Error()
 		return
 	}
 	res.MiBps = float64(moved) / (1024 * 1024) / res.Seconds
 
-	if sc.Load {
+	{
 		cpuAfter, _ := procCPUSeconds(server.cmd.Process.Pid)
 		res.ServerCPU = cpuAfter - cpuBefore
 		res.ServerRSSKB, _ = procRSSKB(server.cmd.Process.Pid)
@@ -495,6 +513,7 @@ func socksEcho(port int, host string, targetPort, seed, size int, deadline time.
 	if !bytes.Equal(got.Sum(nil), want.Sum(nil)) {
 		return n, errors.New("echo data corrupted")
 	}
+	progress.complete = true
 	return 2 * n, nil
 }
 
@@ -625,17 +644,19 @@ func (t *targets) close() {
 // ---- UDP impairment proxy ----
 
 type udpProxy struct {
-	port     int
-	conn     *net.UDPConn
-	server   *net.UDPAddr
-	impair   Impair
-	mu       sync.Mutex
-	peers    map[string]*net.UDPConn
-	upstream atomic.Int64 // client->server datagrams forwarded (= queries)
-	closed   atomic.Bool
-	rng      *rand.Rand
-	rngMu    sync.Mutex
-	started  time.Time
+	port        int
+	conn        *net.UDPConn
+	server      *net.UDPAddr
+	impair      Impair
+	mu          sync.Mutex
+	peers       map[string]*net.UDPConn
+	upstream    atomic.Int64 // client->server datagrams forwarded (= queries)
+	queryCopies atomic.Int64
+	replyCopies atomic.Int64
+	closed      atomic.Bool
+	rng         *rand.Rand
+	rngMu       sync.Mutex
+	started     time.Time
 }
 
 func newUDPProxy(serverPort int, impair Impair) (*udpProxy, error) {
@@ -662,6 +683,10 @@ func (p *udpProxy) roll() float64 {
 
 // deliver applies drop/duplicate/reorder to one datagram.
 func (p *udpProxy) deliver(send func([]byte), pkt []byte) {
+	p.deliverDirection(send, pkt, false)
+}
+
+func (p *udpProxy) deliverDirection(send func([]byte), pkt []byte, reply bool) {
 	if p.closed.Load() {
 		return
 	}
@@ -674,9 +699,18 @@ func (p *udpProxy) deliver(send func([]byte), pkt []byte) {
 	copies := 1
 	if p.impair.Dup > 0 && p.roll() < p.impair.Dup {
 		copies = 2
+		if reply {
+			p.replyCopies.Add(1)
+		} else {
+			p.queryCopies.Add(1)
+		}
 	}
 	for i := 0; i < copies; i++ {
-		delay := p.impair.RTT/2 + time.Duration(p.roll()*float64(p.impair.Jitter))
+		rtt := p.impair.RTT
+		if *slowRTT > rtt && len(pkt) >= 2 && int(binary.BigEndian.Uint16(pkt[:2]))%100 < int(*slowShare*100) {
+			rtt = *slowRTT
+		}
+		delay := rtt/2 + time.Duration(p.roll()*float64(p.impair.Jitter))
 		if p.impair.Reorder > 0 && p.roll() < p.impair.Reorder {
 			delay += p.impair.ReorderDelay
 		}
@@ -729,7 +763,7 @@ func (p *udpProxy) upstreamFor(client *net.UDPAddr) *net.UDPConn {
 			if err != nil {
 				return
 			}
-			p.deliver(func(b []byte) { _, _ = p.conn.WriteToUDP(b, client) }, buf[:n])
+			p.deliverDirection(func(b []byte) { _, _ = p.conn.WriteToUDP(b, client) }, buf[:n], true)
 		}
 	}()
 	return c
@@ -891,6 +925,12 @@ SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]
 SOCKET_BUFFER_SIZE = 8388608
 MAX_PACKET_SIZE = 65535
 `, sc.Mode, udpPort, tunnelDomain, sc.Method, forwardPort, *logLevel)
+	cfg = strings.ReplaceAll(cfg, "ARQ_WINDOW_SIZE = 4096", fmt.Sprintf("ARQ_WINDOW_SIZE = %d", *testWindow))
+	cfg = strings.ReplaceAll(cfg, "ARQ_MAX_RTO_SECONDS = 1.0", fmt.Sprintf("ARQ_MAX_RTO_SECONDS = %.3f", *testMaxRTO))
+	cfg = strings.ReplaceAll(cfg, "ARQ_INITIAL_RTO_SECONDS = 0.25", fmt.Sprintf("ARQ_INITIAL_RTO_SECONDS = %.3f", *testRTO))
+	if *batchLimit > 0 {
+		cfg = strings.ReplaceAll(cfg, "MAX_PACKETS_PER_BATCH = 5", fmt.Sprintf("MAX_PACKETS_PER_BATCH = %d", *batchLimit))
+	}
 	_ = os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o644)
 }
 
@@ -931,6 +971,18 @@ SOCKS5_AUTH = false
 LOCAL_DNS_ENABLED = false
 LOG_LEVEL = %q
 `, sc.Mode, listenPort, tunnelDomain, key, sc.Method, mtuRetries, *logLevel)
+	cfg = strings.ReplaceAll(cfg, "PACKET_DUPLICATION_COUNT = 1", fmt.Sprintf("PACKET_DUPLICATION_COUNT = %d", *clientDup))
+	cfg = strings.ReplaceAll(cfg, "SETUP_PACKET_DUPLICATION_COUNT = "+strconv.Itoa(*clientDup), fmt.Sprintf("SETUP_PACKET_DUPLICATION_COUNT = %d", *setupDup))
+	cfg = strings.ReplaceAll(cfg, "ARQ_WINDOW_SIZE = 4096", fmt.Sprintf("ARQ_WINDOW_SIZE = %d", *testWindow))
+	cfg = strings.ReplaceAll(cfg, "ARQ_MAX_RTO_SECONDS = 1.0", fmt.Sprintf("ARQ_MAX_RTO_SECONDS = %.3f", *testMaxRTO))
+	cfg = strings.ReplaceAll(cfg, "ARQ_INITIAL_RTO_SECONDS = 0.25", fmt.Sprintf("ARQ_INITIAL_RTO_SECONDS = %.3f", *testRTO))
+	cfg = strings.ReplaceAll(cfg, "MIN_DOWNLOAD_MTU = 1000", fmt.Sprintf("MIN_DOWNLOAD_MTU = %d", min(1000, *testMTU)))
+	cfg = strings.ReplaceAll(cfg, "MAX_DOWNLOAD_MTU = 4000", fmt.Sprintf("MAX_DOWNLOAD_MTU = %d", *testMTU))
+	cfg = strings.ReplaceAll(cfg, "UPLOAD_COMPRESSION_TYPE = 0", fmt.Sprintf("UPLOAD_COMPRESSION_TYPE = %d", *testCompression))
+	cfg = strings.ReplaceAll(cfg, "DOWNLOAD_COMPRESSION_TYPE = 0", fmt.Sprintf("DOWNLOAD_COMPRESSION_TYPE = %d", *testCompression))
+	if *batchLimit > 0 {
+		cfg += fmt.Sprintf("MAX_PACKETS_PER_BATCH = %d\n", *batchLimit)
+	}
 	_ = os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "client_resolvers.txt"), []byte(fmt.Sprintf("127.0.0.1:%d\n", resolverPort)), 0o644)
 }
@@ -997,13 +1049,16 @@ type deliveryMeter struct {
 	longest     time.Duration
 	buckets     []int64
 	streams     []StreamProgress
+	first       time.Duration
 }
 
 func (m *deliveryMeter) Write(b []byte) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	if gap := now.Sub(m.last); gap > m.longest {
+	if len(m.buckets) == 0 {
+		m.first = now.Sub(m.start)
+	} else if gap := now.Sub(m.last); gap > m.longest {
 		m.longest = gap
 	}
 	m.last = now
@@ -1017,6 +1072,7 @@ func (m *deliveryMeter) Write(b []byte) (int, error) {
 func (m *deliveryMeter) finish(r *Result) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	r.FirstDeliveryMs = float64(m.first) / float64(time.Millisecond)
 	r.StreamProgress = append([]StreamProgress(nil), m.streams...)
 	r.LongestDeliveryGapMs = float64(m.longest) / float64(time.Millisecond)
 	// Exclude the partial final second from percentiles, but retain its raw sample.
@@ -1037,17 +1093,22 @@ type StreamProgress struct {
 	Seed         int     `json:"seed"`
 	Bytes        int64   `json:"received_bytes"`
 	LongestGapMs float64 `json:"longest_gap_ms"`
+	FirstByteMs  float64 `json:"first_byte_ms"`
 }
 type streamMeter struct {
-	seed    int
-	bytes   int64
-	last    time.Time
-	longest time.Duration
+	seed     int
+	bytes    int64
+	last     time.Time
+	longest  time.Duration
+	first    time.Duration
+	complete bool
 }
 
 func (m *streamMeter) Write(b []byte) (int, error) {
 	now := time.Now()
-	if gap := now.Sub(m.last); gap > m.longest {
+	if m.bytes == 0 {
+		m.first = now.Sub(m.last)
+	} else if gap := now.Sub(m.last); gap > m.longest {
 		m.longest = gap
 	}
 	m.last = now
@@ -1058,6 +1119,9 @@ func (m *deliveryMeter) recordStream(s *streamMeter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Include the final read wait (including a timeout) in failure artifacts.
-	longest := max(s.longest, time.Since(s.last))
-	m.streams = append(m.streams, StreamProgress{Seed: s.seed, Bytes: s.bytes, LongestGapMs: float64(longest) / float64(time.Millisecond)})
+	longest := s.longest
+	if !s.complete {
+		longest = max(longest, time.Since(s.last))
+	}
+	m.streams = append(m.streams, StreamProgress{Seed: s.seed, Bytes: s.bytes, LongestGapMs: float64(longest) / float64(time.Millisecond), FirstByteMs: float64(s.first) / float64(time.Millisecond)})
 }

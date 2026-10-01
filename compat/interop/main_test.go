@@ -93,7 +93,31 @@ func TestPerStreamProgressRetainsFailedTransferBytes(t *testing.T) {
 	meter.recordStream(stream)
 	var result Result
 	meter.finish(&result)
-	if len(result.StreamProgress) != 1 || result.StreamProgress[0].Bytes != 3 || result.StreamProgress[0].LongestGapMs < 90 {
+	if len(result.StreamProgress) != 1 || result.StreamProgress[0].Bytes != 3 || result.StreamProgress[0].FirstByteMs < 90 {
 		t.Fatalf("missing partial transfer progress: %+v", result)
+	}
+}
+
+func TestGapMetricsDoNotCountSetupOrSuccessfulCompletionWait(t *testing.T) {
+	now := time.Now()
+	meter := &deliveryMeter{start: now.Add(-time.Second), last: now.Add(-time.Second)}
+	meter.Write([]byte("a"))
+	if meter.first < 900*time.Millisecond || meter.longest != 0 {
+		t.Fatal("setup must be separate from delivery gaps")
+	}
+	stream := &streamMeter{seed: 1, bytes: 10, last: now.Add(-time.Second), longest: 20 * time.Millisecond, complete: true}
+	meter.recordStream(stream)
+	if meter.streams[0].LongestGapMs != 20 {
+		t.Fatal("a completed stream must not count post-delivery wait as a gap")
+	}
+}
+
+func TestInjectedQueryAndReplyCopiesAreCountedSeparately(t *testing.T) {
+	proxy := &udpProxy{impair: Impair{Dup: 1}, rng: rand.New(rand.NewSource(1))}
+	sent := 0
+	proxy.deliver(func([]byte) { sent++ }, []byte("query"))
+	proxy.deliverDirection(func([]byte) { sent++ }, []byte("reply"), true)
+	if sent != 4 || proxy.queryCopies.Load() != 1 || proxy.replyCopies.Load() != 1 {
+		t.Fatal("proxy duplication accounting mixed directions")
 	}
 }
