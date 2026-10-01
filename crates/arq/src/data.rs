@@ -431,6 +431,7 @@ impl Arq {
         let mut was_queued = false;
         let mut sample = std::time::Duration::ZERO;
         let mut sample_eligible = false;
+        let mut recovery_ready = false;
 
         {
             let mut s = self.inner.lock().unwrap();
@@ -444,7 +445,25 @@ impl Arq {
                     }
                 }
                 was_queued = !info.dispatched;
+                let acked_created_at = info.created_at;
+                let acked_sent_at = if info.dispatched && info.sample_eligible { info.last_sent_at } else { None };
                 s.snd_buf.remove(&sn);
+                // Only newly consumed ACKs count. Duplicates have no send-buffer
+                // entry and cannot manufacture loss evidence. Compare send
+                // times as well as wrapping sequence numbers to avoid treating
+                // a late ACK of a retransmission as evidence against new data.
+                if let Some(acked_sent_at) = acked_sent_at {
+                    for (&missing, item) in s.snd_buf.iter_mut() {
+                        if item.dispatched
+                            && crate::util::seq_behind(sn, missing)
+                            && item.created_at <= acked_created_at
+                            && item.last_sent_at.is_some_and(|at| at <= acked_sent_at)
+                        {
+                            recovery_ready |= item.later_acks == 3;
+                            item.later_acks = item.later_acks.saturating_add(1).min(4);
+                        }
+                    }
+                }
                 if was_queued {
                     s.queued_data = s.queued_data.saturating_sub(1);
                 }
@@ -458,6 +477,9 @@ impl Arq {
             }
         }
 
+        if recovery_ready {
+            self.reack_scheduled.notify_one();
+        }
         if should_signal_window {
             self.window_not_full.notify_one();
         }
@@ -485,60 +507,7 @@ impl Arq {
     }
 
     pub fn handle_data_nack(&self, sn: u16) -> bool {
-        if self.is_closed() || self.is_reset() {
-            return false;
-        }
-
-        let now = Instant::now();
-        let data;
-        let compression_type;
-        let ttl;
-        let prev_nack_sent_at;
-        {
-            let mut s = self.inner.lock().unwrap();
-            s.last_activity = now;
-            let info = match s.snd_buf.get_mut(&sn) {
-                Some(i) => i,
-                None => return false,
-            };
-            prev_nack_sent_at = info.last_nack_sent_at;
-            if let Some(prev) = prev_nack_sent_at {
-                if now.duration_since(prev) < self.data_nack_repeat_interval {
-                    return false;
-                }
-            }
-            info.last_nack_sent_at = Some(now);
-            data = info.data.clone();
-            compression_type = info.compression_type;
-            ttl = info.ttl;
-        }
-
-        let ok = self.enqueuer.push_tx_packet(
-            enums::default_packet_priority(enums::PACKET_STREAM_RESEND),
-            enums::PACKET_STREAM_RESEND,
-            sn,
-            0,
-            0,
-            compression_type,
-            ttl,
-            &data,
-        );
-
-        if !ok {
-            let mut s = self.inner.lock().unwrap();
-            if let Some(info) = s.snd_buf.get_mut(&sn) {
-                if info.last_nack_sent_at == Some(now) {
-                    info.last_nack_sent_at = prev_nack_sent_at;
-                }
-            }
-            return false;
-        }
-
-        let mut s = self.inner.lock().unwrap();
-        if let Some(info) = s.snd_buf.get_mut(&sn) {
-            info.sample_eligible = false;
-        }
-        true
+        self.queue_data_retry(sn, Instant::now(), None, false, true)
     }
 
     pub(crate) fn maybe_send_data_nacks(&self, sn: u16) {
@@ -728,7 +697,6 @@ impl Arq {
             self.note_data_nack_sent(missing, now);
         }
     }
-
 }
 
 fn prune_data_nack_state_locked(state: &mut ArqState, rcv_nxt: u16) {

@@ -70,6 +70,8 @@ impl ArqLogger for DummyLogger {}
 #[derive(Debug, Clone)]
 pub(crate) struct DataItem {
     pub data: Vec<u8>,
+    /// Distinct later ACKs observed since the last transmission.
+    pub later_acks: u8,
     pub created_at: Instant,
     pub last_sent_at: Option<Instant>,
     pub dispatched: bool,
@@ -113,8 +115,8 @@ pub(crate) struct AdaptiveRtoState {
 
 pub(crate) struct RtxJob {
     pub sn: u16,
-    pub data: Vec<u8>,
-    pub compression_type: u8,
+    pub sent_at: Instant,
+    pub timed_out: bool,
 }
 
 pub(crate) fn setup_control_packet_types() -> &'static HashMap<u8, ()> {

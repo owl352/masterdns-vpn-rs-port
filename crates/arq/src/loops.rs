@@ -282,6 +282,7 @@ async fn io_loop(arq: Arc<Arq>) {
                         sn,
                         crate::types::DataItem {
                             data: raw.clone(),
+                            later_acks: 0,
                             created_at: now,
                             last_sent_at: None,
                             dispatched: false,
@@ -562,6 +563,10 @@ async fn retransmit_loop(arq: Arc<Arq>) {
         // `FAST_ACK_DELAY` (25ms) itself, so it does not meaningfully change
         // how late either can land relative to the client's RTO margin.
         let earliest_due = match (arq.next_reack_due(), arq.next_fast_ack_due()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let earliest_due = match (earliest_due, arq.next_data_retry_due()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };

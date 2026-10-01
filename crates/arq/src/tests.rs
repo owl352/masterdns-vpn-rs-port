@@ -17,6 +17,8 @@ struct MockEnqueuer {
     /// What `has_queued_download_data` reports, settable per-test to drive
     /// `store_received_data`'s immediate-ACK priority decision.
     has_backlog: std::sync::atomic::AtomicBool,
+    reject: std::sync::atomic::AtomicBool,
+    on_push: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl PacketEnqueuer for MockEnqueuer {
@@ -31,6 +33,12 @@ impl PacketEnqueuer for MockEnqueuer {
         _ttl: Duration,
         payload: &[u8],
     ) -> bool {
+        if let Some(action) = self.on_push.lock().unwrap().take() {
+            action();
+        }
+        if self.reject.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
         self.pushed.lock().unwrap().push((packet_type, sequence_num, payload.to_vec()));
         self.priorities.lock().unwrap().push((priority, packet_type, sequence_num));
         self.notify.notify_one();
@@ -289,7 +297,14 @@ async fn ancient_duplicate_that_looks_ahead_is_reacked() {
 
     // 15000 is ~45000 behind 60000, i.e. 20536 "ahead" modulo 65536.
     arq.process_received_data(15000, b"old");
-    let acked = |sn: u16| enqueuer.pushed.lock().unwrap().iter().any(|(t, s, _)| *t == enums::PACKET_STREAM_DATA_ACK && *s == sn);
+    let acked = |sn: u16| {
+        enqueuer
+            .pushed
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(t, s, _)| *t == enums::PACKET_STREAM_DATA_ACK && *s == sn)
+    };
     assert!(acked(15000), "old duplicate was not re-ACKed");
     assert!(arq.inner.lock().unwrap().rcv_buf.is_empty(), "old duplicate must not be buffered");
 
@@ -520,4 +535,215 @@ async fn fast_ack_is_emitted_at_critical_priority_after_its_delay() {
     let (sn, _) = wait_for_push(&enqueuer, enums::PACKET_STREAM_DATA_ACK).await;
     assert_eq!(sn, 0);
     assert_eq!(enqueuer.priority_of(enums::PACKET_STREAM_DATA_ACK, 0), Some(enums::PACKET_PRIORITY_CRITICAL), "the fast ACK must fire at CRITICAL, not LOW");
+}
+
+fn recovery_fixture(first: u16, age: Duration, count: u16) -> (std::sync::Arc<crate::Arq>, std::sync::Arc<MockEnqueuer>) {
+    use crate::types::{AdaptiveRtoState, DataItem};
+    use std::time::Instant;
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    let arq = crate::Arq::new(80, 1, mock.clone(), 1000, None, Config { rto: 1.0, ..Config::default() });
+    let now = Instant::now();
+    let mut s = arq.inner.lock().unwrap();
+    s.data_adaptive_rto = AdaptiveRtoState {
+        srtt: Duration::from_millis(20),
+        rttvar: Duration::from_millis(2),
+        current_base: Duration::from_secs(1),
+        initialized: true,
+    };
+    for offset in 0..count {
+        let sn = first.wrapping_add(offset);
+        s.snd_buf.insert(
+            sn,
+            DataItem {
+                data: vec![offset as u8],
+                later_acks: 0,
+                created_at: now - age,
+                last_sent_at: Some(if offset == 0 { now - age } else { now - Duration::from_millis(10) }),
+                dispatched: true,
+                last_nack_sent_at: None,
+                retries: 0,
+                current_rto: Duration::from_secs(1),
+                sample_eligible: true,
+                compression_type: 0,
+                ttl: Duration::ZERO,
+            },
+        );
+    }
+    drop(s);
+    (arq, mock)
+}
+
+#[test]
+fn fast_recovery_requires_distinct_acks_and_reorder_grace() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(30), 6);
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
+    for _ in 0..10 {
+        assert!(!arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
+    }
+    assert_eq!(arq.inner.lock().unwrap().snd_buf[&0].later_acks, 1);
+    for sn in 2..=4 {
+        assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn));
+    }
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().is_empty(), "benign reorder must not trigger repair");
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0));
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn isolated_loss_is_repaired_before_timeout_including_wrap() {
+    for first in [0, 65534] {
+        let (arq, mock) = recovery_fixture(first, Duration::from_millis(300), 5);
+        for offset in 1..=4 {
+            assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, first.wrapping_add(offset)));
+        }
+        arq.check_retransmits();
+        let pushed = mock.pushed.lock().unwrap();
+        assert_eq!(pushed.len(), 1);
+        assert_eq!((pushed[0].0, pushed[0].1), (enums::PACKET_STREAM_RESEND, first));
+        drop(pushed);
+        let s = arq.inner.lock().unwrap();
+        assert_eq!(s.queued_data, 1);
+        assert_eq!(s.snd_buf[&first].current_rto, Duration::from_secs(1));
+        assert!(!s.snd_buf[&first].sample_eligible);
+        drop(s);
+        // A timeout tick and explicit NACK cannot duplicate a queued repair.
+        arq.check_retransmits();
+        assert!(!arq.handle_data_nack(first));
+        assert_eq!(mock.pushed.lock().unwrap().len(), 1);
+        arq.note_tx_packet_dequeued(enums::PACKET_STREAM_RESEND, first, 0);
+        assert_eq!(arq.inner.lock().unwrap().queued_data, 0);
+        arq.check_retransmits();
+        assert_eq!(mock.pushed.lock().unwrap().len(), 1, "recovery must cool down after actual send");
+    }
+}
+
+#[test]
+fn missing_tail_retains_timeout_fallback() {
+    let (arq, mock) = recovery_fixture(9, Duration::from_secs(2), 1);
+    arq.check_retransmits();
+    assert_eq!(mock.pushed.lock().unwrap().len(), 1);
+    assert_eq!(arq.inner.lock().unwrap().snd_buf[&9].current_rto, Duration::from_millis(1350));
+}
+
+#[test]
+fn retry_failure_rolls_back_reservation() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_secs(2), 1);
+    mock.reject.store(true, std::sync::atomic::Ordering::SeqCst);
+    arq.check_retransmits();
+    let s = arq.inner.lock().unwrap();
+    assert_eq!(s.queued_data, 0);
+    assert_eq!(s.snd_buf[&0].retries, 0);
+    assert!(s.snd_buf[&0].dispatched);
+    assert!(s.snd_buf[&0].sample_eligible);
+}
+
+#[test]
+fn dequeue_during_retry_enqueue_keeps_actual_send_timestamp() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_secs(2), 1);
+    let a = arq.clone();
+    *mock.on_push.lock().unwrap() = Some(Box::new(move || {
+        a.note_tx_packet_dequeued(enums::PACKET_STREAM_RESEND, 0, 0);
+    }));
+    arq.check_retransmits();
+    let s = arq.inner.lock().unwrap();
+    assert!(s.snd_buf[&0].dispatched);
+    assert_eq!(s.queued_data, 0);
+    assert!(s.snd_buf[&0].last_sent_at.unwrap().elapsed() < Duration::from_millis(100));
+}
+
+#[test]
+fn ack_during_retry_enqueue_and_stale_job_do_not_resurrect_data() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_secs(2), 1);
+    let sent_at = arq.inner.lock().unwrap().snd_buf[&0].last_sent_at;
+    let a = arq.clone();
+    *mock.on_push.lock().unwrap() = Some(Box::new(move || {
+        assert!(a.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0));
+    }));
+    arq.check_retransmits();
+    assert!(!arq.has_pending_sequence(0));
+    assert_eq!(arq.inner.lock().unwrap().queued_data, 0);
+    assert!(!arq.queue_data_retry(0, std::time::Instant::now(), sent_at, true, false));
+}
+
+#[test]
+fn burst_recovery_is_bounded_and_close_cancels_retries() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_secs(2), 100);
+    {
+        let mut s = arq.inner.lock().unwrap();
+        for item in s.snd_buf.values_mut() {
+            item.last_sent_at = Some(std::time::Instant::now() - Duration::from_secs(2));
+        }
+    }
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().len() <= 32);
+    let s = arq.inner.lock().unwrap();
+    assert_eq!(s.queued_data, s.snd_buf.values().filter(|i| !i.dispatched).count());
+    drop(s);
+    arq.close("test", CloseOptions::default());
+    assert!(!arq.handle_data_nack(99));
+}
+
+#[test]
+fn retransmitted_ack_cannot_manufacture_fresh_loss_evidence() {
+    let (arq, _) = recovery_fixture(0, Duration::from_millis(300), 5);
+    {
+        let mut s = arq.inner.lock().unwrap();
+        for sn in 1..=4 { s.snd_buf.get_mut(&sn).unwrap().sample_eligible = false; }
+    }
+    for sn in 1..=4 { assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn)); }
+    assert_eq!(arq.inner.lock().unwrap().snd_buf[&0].later_acks, 0);
+}
+
+#[test]
+fn jitter_grace_defers_fast_retry_and_stale_job_cannot_requeue_new_send() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(300), 5);
+    {
+        let mut s = arq.inner.lock().unwrap();
+        s.data_adaptive_rto.srtt = Duration::from_millis(200);
+        s.data_adaptive_rto.rttvar = Duration::from_millis(100);
+        s.snd_buf.get_mut(&0).unwrap().later_acks = 4;
+    }
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().is_empty());
+    let sent = arq.inner.lock().unwrap().snd_buf[&0].last_sent_at;
+    arq.note_tx_packet_dequeued(enums::PACKET_STREAM_DATA, 0, 0);
+    assert!(!arq.queue_data_retry(0, std::time::Instant::now(), sent, true, false));
+    assert_eq!(arq.inner.lock().unwrap().queued_data, 0);
+}
+
+#[test]
+fn explicit_nack_is_coalesced_and_invalidates_rtt_sample() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(300), 1);
+    assert!(arq.handle_data_nack(0));
+    assert!(!arq.handle_data_nack(0));
+    arq.note_tx_packet_dequeued(enums::PACKET_STREAM_RESEND, 0, 0);
+    assert!(!arq.handle_data_nack(0), "recent NACK must retain its repeat cooldown after send");
+    assert_eq!(mock.pushed.lock().unwrap().len(), 1);
+    assert!(!arq.inner.lock().unwrap().snd_buf[&0].sample_eligible);
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0));
+    assert_eq!(arq.inner.lock().unwrap().data_adaptive_rto.srtt, Duration::from_millis(20));
+}
+
+#[test]
+fn exact_retry_deadline_waits_for_a_genuine_rtt_observation() {
+    let (arq, _) = recovery_fixture(0, Duration::from_millis(300), 5);
+    arq.inner.lock().unwrap().data_adaptive_rto = Default::default();
+    assert!(arq.next_data_retry_due().is_none());
+    assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
+    assert!(arq.inner.lock().unwrap().data_adaptive_rto.initialized);
+    assert!(arq.next_data_retry_due().is_some());
+}
+
+#[test]
+fn packets_created_before_rtt_sample_benefit_from_learned_timeout() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(1500), 1);
+    arq.inner.lock().unwrap().data_adaptive_rto.current_base = Duration::from_secs(2);
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().is_empty());
+    let s = arq.inner.lock().unwrap();
+    let sent = s.snd_buf[&0].last_sent_at.unwrap();
+    drop(s);
+    assert_eq!(arq.next_data_retry_due(), Some(sent + Duration::from_secs(2)));
 }

@@ -32,6 +32,8 @@ impl Arq {
         {
             let s = self.inner.lock().unwrap();
             draining = s.deferred_close || matches!(s.state, StreamState::Draining);
+            let reorder_grace = self.reorder_grace(&s);
+            let data_base = self.current_data_base_rto(&s);
 
             for (&sn, info) in s.snd_buf.iter() {
                 if !info.ttl.is_zero() {
@@ -44,7 +46,10 @@ impl Arq {
                     break;
                 }
 
-                let mut effective_rto = info.current_rto;
+                // Packets queued before the first RTT sample must benefit
+                // from that sample too, especially when the initial guess
+                // was shorter than the actual resolver path.
+                let mut effective_rto = info.current_rto.max(data_base);
                 if draining && effective_rto > drain_rto_cap {
                     effective_rto = drain_rto_cap;
                 }
@@ -53,11 +58,18 @@ impl Arq {
                     continue;
                 }
                 let last_sent = info.last_sent_at.unwrap_or(now);
-                if now.duration_since(last_sent) < effective_rto {
+                let age = now.saturating_duration_since(last_sent);
+                let timed_out = age >= effective_rto;
+                let fast_due = info.later_acks >= 4 && age >= reorder_grace;
+                if !timed_out && !fast_due {
                     continue;
                 }
 
-                jobs.push(RtxJob { sn, data: info.data.clone(), compression_type: info.compression_type });
+                jobs.push(RtxJob {
+                    sn,
+                    sent_at: last_sent,
+                    timed_out,
+                });
             }
         }
 
@@ -70,41 +82,12 @@ impl Arq {
             return;
         }
 
-        let priority_kinds = self.retransmit_priority_kinds(&jobs);
-        for (i, j) in jobs.iter().enumerate() {
-            let mut priority = enums::default_packet_priority(enums::PACKET_STREAM_DATA);
-            let mut packet_type = enums::PACKET_STREAM_DATA;
-
-            if priority_kinds[i] {
-                priority = enums::default_packet_priority(enums::PACKET_STREAM_RESEND);
-                packet_type = enums::PACKET_STREAM_RESEND;
-            }
-
-            let ok = self.enqueuer.push_tx_packet(priority, packet_type, j.sn, 0, 0, j.compression_type, Duration::ZERO, &j.data);
-            if !ok {
-                self.note_drain_queue_failure(now);
-                continue;
-            }
-
-            let mut s = self.inner.lock().unwrap();
-            let data_floor = self.current_data_base_rto(&s);
-            let mut requeued = false;
-            if let Some(info) = s.snd_buf.get_mut(&j.sn) {
-                info.last_sent_at = Some(now);
-                requeued = info.dispatched;
-                info.dispatched = false;
-                info.retries += 1;
-                info.sample_eligible = false;
-                let grown_rto = grow_duration(info.current_rto, DATA_RETRANSMIT_RTO_GROWTH_FACTOR);
-                let mut max_rto = self.max_rto;
-                if draining && max_rto > drain_rto_cap {
-                    max_rto = drain_rto_cap;
-                }
-                info.current_rto = clamp_duration(grown_rto, data_floor, max_rto);
-            }
-            if requeued {
-                s.queued_data += 1;
-            }
+        // Repair the oldest holes first; bound work so a loss burst cannot
+        // fill every reply slot with recovery packets in one tick.
+        jobs.sort_by_key(|j| j.sent_at);
+        jobs.truncate((self.window_size / 10).clamp(1, 32));
+        for j in &jobs {
+            self.queue_data_retry(j.sn, now, Some(j.sent_at), j.timed_out, false);
         }
 
         if self.enable_control_reliability {
@@ -112,72 +95,114 @@ impl Arq {
         }
     }
 
-    fn retransmit_priority_kinds(&self, jobs: &[RtxJob]) -> Vec<bool> {
-        if jobs.is_empty() {
-            return Vec::new();
+    pub(crate) fn next_data_retry_due(&self) -> Option<Instant> {
+        let s = self.inner.lock().unwrap();
+        // Until a genuine RTT sample exists, retain the existing scheduler's
+        // cadence. An exact initial-RTO deadline can expire every packet on
+        // paths slower than that initial guess, exclude every ACK under Karn,
+        // and prevent the estimator from ever learning the actual RTT.
+        if !s.data_adaptive_rto.initialized {
+            return None;
         }
+        let grace = self.reorder_grace(&s);
+        let draining = s.deferred_close || matches!(s.state, StreamState::Draining);
+        let cap = clamp_duration(Duration::from_secs(2), self.rto, self.max_rto);
+        s.snd_buf
+            .values()
+            .filter(|item| item.dispatched)
+            .filter_map(|item| {
+                let at = item.last_sent_at?;
+                let timeout = item.current_rto.max(self.current_data_base_rto(&s));
+                let timeout = if draining { timeout.min(cap) } else { timeout };
+                Some(at + if item.later_acks >= 4 { timeout.min(grace) } else { timeout })
+            })
+            .min()
+    }
 
-        let mut kinds = vec![false; jobs.len()];
-        if jobs.len() == 1 {
-            kinds[0] = true;
-            return kinds;
+    fn reorder_grace(&self, s: &crate::state::ArqState) -> Duration {
+        let rtt = &s.data_adaptive_rto;
+        if !rtt.initialized {
+            return self.rto;
         }
+        // Four later ACKs alone are not loss evidence on mixed resolvers.
+        // Allow a complete RTT plus its observed jitter before early repair.
+        (rtt.srtt + rtt.rttvar * 4).max(Duration::from_millis(100)).min(self.max_rto)
+    }
 
-        let mut front_budget = self.window_size / 10;
-        if front_budget < 1 {
-            front_budget = 1;
-        }
-        if front_budget > 64 {
-            front_budget = 64;
-        }
-        if front_budget > jobs.len() {
-            front_budget = jobs.len();
-        }
-
-        let snd_nxt = self.inner.lock().unwrap().snd_nxt;
-
-        let mut best_idx: Vec<usize> = Vec::with_capacity(front_budget);
-        let mut best_dist: Vec<u16> = Vec::with_capacity(front_budget);
-
-        let insert_best = |idx: usize, dist: u16, best_idx: &mut Vec<usize>, best_dist: &mut Vec<u16>| {
-            let mut pos = best_idx.len();
-            while pos > 0 {
-                let prev = pos - 1;
-                let prev_dist = best_dist[prev];
-                let prev_idx = best_idx[prev];
-                if prev_dist > dist || (prev_dist == dist && jobs[prev_idx].sn <= jobs[idx].sn) {
-                    break;
-                }
-                pos -= 1;
+    /// Reserve a retry before enqueueing it, shared by timeout, early recovery
+    /// and explicit NACK. Never overwrite a concurrent dequeue's timestamp.
+    /// Queue failure rolls back only our still-queued reservation.
+    pub(crate) fn queue_data_retry(&self, sn: u16, now: Instant, expected_sent: Option<Instant>, timed_out: bool, nack: bool) -> bool {
+        let previous = {
+            let mut s = self.inner.lock().unwrap();
+            if s.closed || s.rst_sent || s.rst_received {
+                return false;
             }
-
-            best_idx.insert(pos, idx);
-            best_dist.insert(pos, dist);
-
-            if best_idx.len() > front_budget {
-                best_idx.truncate(front_budget);
-                best_dist.truncate(front_budget);
+            let floor = self.current_data_base_rto(&s);
+            let ceiling = if s.deferred_close || matches!(s.state, StreamState::Draining) {
+                self.max_rto.min(clamp_duration(Duration::from_secs(2), self.rto, self.max_rto))
+            } else {
+                self.max_rto
+            };
+            if nack {
+                s.last_activity = now;
             }
+            let Some(item) = s.snd_buf.get_mut(&sn) else {
+                return false;
+            };
+            if !item.dispatched || expected_sent.is_some_and(|at| item.last_sent_at != Some(at)) {
+                return false;
+            }
+            if nack
+                && item
+                    .last_nack_sent_at
+                    .is_some_and(|at| now.saturating_duration_since(at) < self.data_nack_repeat_interval)
+            {
+                return false;
+            }
+            let previous = item.clone();
+            item.dispatched = false;
+            item.sample_eligible = false;
+            item.later_acks = 0;
+            item.retries += 1;
+            if nack {
+                item.last_nack_sent_at = Some(now);
+            }
+            if timed_out {
+                item.current_rto = clamp_duration(grow_duration(item.current_rto, DATA_RETRANSMIT_RTO_GROWTH_FACTOR), floor, ceiling);
+            }
+            s.queued_data += 1;
+            previous
         };
-
-        for i in 0..jobs.len() {
-            let dist = snd_nxt.wrapping_sub(jobs[i].sn);
-            if best_idx.len() < front_budget {
-                insert_best(i, dist, &mut best_idx, &mut best_dist);
-                continue;
+        let ok = self.enqueuer.push_tx_packet(
+            enums::default_packet_priority(enums::PACKET_STREAM_RESEND),
+            enums::PACKET_STREAM_RESEND,
+            sn,
+            0,
+            0,
+            previous.compression_type,
+            previous.ttl,
+            &previous.data,
+        );
+        if !ok {
+            let mut s = self.inner.lock().unwrap();
+            if let Some(item) = s.snd_buf.get_mut(&sn) {
+                if item.created_at == previous.created_at && !item.dispatched && item.retries == previous.retries + 1 {
+                    *item = previous;
+                    s.queued_data = s.queued_data.saturating_sub(1);
+                }
             }
-
-            let last = best_idx.len() - 1;
-            if dist > best_dist[last] || (dist == best_dist[last] && jobs[i].sn < jobs[best_idx[last]].sn) {
-                insert_best(i, dist, &mut best_idx, &mut best_dist);
-            }
+            drop(s);
+            self.data_dequeued.notify_one();
+            self.note_drain_queue_failure(now);
+            return false;
         }
-
-        for idx in best_idx {
-            kinds[idx] = true;
+        // An ACK may have arrived between reservation and enqueue. Remove
+        // its stale queued retry; the response path also filters stale data.
+        if !self.has_pending_sequence(sn) {
+            self.enqueuer.remove_queued_data(sn);
         }
-
-        kinds
+        true
     }
 
     fn handle_terminal_retransmit_state(&self, now: Instant) -> bool {
