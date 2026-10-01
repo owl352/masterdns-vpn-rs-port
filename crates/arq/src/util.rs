@@ -15,13 +15,11 @@ pub(crate) fn abs_duration(a: Duration, b: Duration) -> Duration {
     }
 }
 
-pub(crate) fn update_adaptive_rto(
-    mut state: AdaptiveRtoState,
-    sample: Duration,
-    min_rto: Duration,
-    max_rto: Duration,
-) -> AdaptiveRtoState {
-    let sample = clamp_duration(sample, min_rto, max_rto);
+pub(crate) fn update_adaptive_rto(mut state: AdaptiveRtoState, sample: Duration, min_rto: Duration, max_rto: Duration) -> AdaptiveRtoState {
+    // The configured floor bounds the timeout, not the RTT observation.
+    // Clamping samples to it hides fast paths and inflates the measured
+    // variance, which also makes reordering-aware recovery unnecessarily slow.
+    let sample = sample.min(max_rto).max(Duration::from_micros(1));
 
     if !state.initialized {
         state.srtt = sample;
@@ -49,4 +47,33 @@ pub(crate) const SETUP_CONTROL_RTO_GROWTH_FACTOR: f64 = 1.15;
 
 pub(crate) fn grow_duration(d: Duration, factor: f64) -> Duration {
     Duration::from_secs_f64(d.as_secs_f64() * factor)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtt_observation_is_not_raised_to_timeout_floor() {
+        let min = Duration::from_secs(1);
+        let max = Duration::from_secs(10);
+        let state = update_adaptive_rto(AdaptiveRtoState::default(), Duration::from_millis(20), min, max);
+        assert_eq!(state.srtt, Duration::from_millis(20));
+        assert_eq!(state.rttvar, Duration::from_millis(10));
+        assert_eq!(state.current_base, min);
+        let state = update_adaptive_rto(state, Duration::from_millis(28), min, max);
+        assert_eq!(state.srtt, Duration::from_millis(21));
+        assert_eq!(state.rttvar, Duration::from_micros(9500));
+        assert_eq!(state.current_base, min);
+    }
+
+    #[test]
+    fn rto_preserves_upper_bound_and_zero_sample_is_safe() {
+        let min = Duration::from_millis(100);
+        let max = Duration::from_secs(2);
+        let state = update_adaptive_rto(AdaptiveRtoState::default(), Duration::from_secs(20), min, max);
+        assert_eq!(state.current_base, max);
+        let state = update_adaptive_rto(AdaptiveRtoState::default(), Duration::ZERO, min, max);
+        assert_eq!(state.srtt, Duration::from_micros(1));
+        assert_eq!(state.current_base, min);
+    }
 }
