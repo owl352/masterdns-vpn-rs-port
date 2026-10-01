@@ -14,6 +14,7 @@ impl Arq {
         }
 
         let now = Instant::now();
+        self.emit_diagnostic_snapshot(now);
         self.run_gap_recovery_watchdog(now);
         self.run_final_ack_watchdog(now);
         self.emit_due_reacks(now);

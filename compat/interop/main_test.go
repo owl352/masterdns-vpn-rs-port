@@ -70,3 +70,30 @@ func TestProxyCopiesDelayedPacketsAndStopsAfterClose(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 }
+
+func TestStressScenariosAreExplicitAndRoutineGateStaysBounded(t *testing.T) {
+	all := allScenarios()
+	routine, err := pick(all, "all")
+	if err != nil || len(routine) != 9 {
+		t.Fatalf("routine scenarios: %d, %v", len(routine), err)
+	}
+	stress, err := pick(all, "stress")
+	if err != nil || len(stress) != 3 {
+		t.Fatalf("stress scenarios: %d, %v", len(stress), err)
+	}
+	if stress[0].Streams != 8 || stress[0].Bytes != int(8*1024*1024**scale) {
+		t.Fatal("large duplex regression size changed")
+	}
+}
+
+func TestPerStreamProgressRetainsFailedTransferBytes(t *testing.T) {
+	meter := &deliveryMeter{}
+	stream := &streamMeter{seed: 7, last: time.Now().Add(-100 * time.Millisecond)}
+	stream.Write([]byte("abc"))
+	meter.recordStream(stream)
+	var result Result
+	meter.finish(&result)
+	if len(result.StreamProgress) != 1 || result.StreamProgress[0].Bytes != 3 || result.StreamProgress[0].LongestGapMs < 90 {
+		t.Fatalf("missing partial transfer progress: %+v", result)
+	}
+}

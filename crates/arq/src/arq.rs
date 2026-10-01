@@ -71,6 +71,7 @@ pub struct Arq {
     pub(crate) has_local_conn: AtomicBool,
 
     pub(crate) cancel_token: CancellationToken,
+    pub(crate) diagnostic_tick: Option<Mutex<Instant>>,
 }
 
 impl Arq {
@@ -131,6 +132,7 @@ impl Arq {
             local_conn_write: Mutex::new(None),
             has_local_conn: AtomicBool::new(false),
             cancel_token: CancellationToken::new(),
+            diagnostic_tick: std::env::var_os("MASTERDNS_STALL_DIAGNOSTICS").map(|_| Mutex::new(Instant::now())),
         });
 
         arq.window_not_full.notify_one();

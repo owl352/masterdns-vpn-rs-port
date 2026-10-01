@@ -20,6 +20,7 @@ mod arq;
 mod close;
 mod control;
 mod data;
+mod diagnostics;
 mod retransmit;
 mod state;
 mod terminal;

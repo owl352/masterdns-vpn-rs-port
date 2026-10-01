@@ -57,21 +57,22 @@ type Scenario struct {
 }
 
 type Result struct {
-	Scenario             string    `json:"scenario"`
-	Pass                 bool      `json:"pass"`
-	Error                string    `json:"error,omitempty"`
-	Seconds              float64   `json:"seconds"`
-	MiBps                float64   `json:"mib_s"`
-	CleanShutdown        bool      `json:"clean_shutdown"`
-	ServerCPU            float64   `json:"server_cpu_s,omitempty"`
-	ServerRSSKB          int       `json:"server_rss_kb,omitempty"`
-	Queries              int64     `json:"queries,omitempty"`
-	CPUPerQueryUs        float64   `json:"cpu_per_query_us,omitempty"`
-	LogErrors            int       `json:"server_log_errors"`
-	DownloadP10Mbps      float64   `json:"download_p10_mbps,omitempty"`
-	DownloadMedianMbps   float64   `json:"download_median_mbps,omitempty"`
-	LongestDeliveryGapMs float64   `json:"longest_delivery_gap_ms,omitempty"`
-	DownloadSamplesMbps  []float64 `json:"download_samples_mbps,omitempty"`
+	Scenario             string           `json:"scenario"`
+	Pass                 bool             `json:"pass"`
+	Error                string           `json:"error,omitempty"`
+	Seconds              float64          `json:"seconds"`
+	MiBps                float64          `json:"mib_s"`
+	CleanShutdown        bool             `json:"clean_shutdown"`
+	ServerCPU            float64          `json:"server_cpu_s,omitempty"`
+	ServerRSSKB          int              `json:"server_rss_kb,omitempty"`
+	Queries              int64            `json:"queries,omitempty"`
+	CPUPerQueryUs        float64          `json:"cpu_per_query_us,omitempty"`
+	LogErrors            int              `json:"server_log_errors"`
+	DownloadP10Mbps      float64          `json:"download_p10_mbps,omitempty"`
+	DownloadMedianMbps   float64          `json:"download_median_mbps,omitempty"`
+	StreamProgress       []StreamProgress `json:"stream_progress,omitempty"`
+	LongestDeliveryGapMs float64          `json:"longest_delivery_gap_ms,omitempty"`
+	DownloadSamplesMbps  []float64        `json:"download_samples_mbps,omitempty"`
 }
 
 var (
@@ -107,13 +108,24 @@ func allScenarios() []Scenario {
 		{Name: "socks-echo-lossy", Mode: "SOCKS5", Work: "echo", Method: 1, Clients: 1, Streams: 4, Bytes: mib(0.5), Impair: lossy},
 		{Name: "load-sessions", Mode: "SOCKS5", Work: "echo", Method: 1, Clients: 8, Streams: 4, Bytes: mib(0.5), Impair: &Impair{}, Load: true},
 		{Name: "load-streams", Mode: "SOCKS5", Work: "echo", Method: 1, Clients: 1, Streams: 64, Bytes: mib(0.125), Impair: &Impair{}, Load: true},
+		{Name: "stress-duplex", Mode: "SOCKS5", Work: "echo", Method: 2, Clients: 1, Streams: 8, Bytes: mib(8)},
+		{Name: "stress-upload-eof", Mode: "TCP", Work: "upload", Method: 1, Clients: 1, Streams: 1, Bytes: mib(40)},
+		{Name: "stress-download", Mode: "TCP", Work: "download", Method: 1, Clients: 1, Streams: 1, Bytes: mib(256)},
 	}
 }
 
 func pick(all []Scenario, sel string) ([]Scenario, error) {
 	switch sel {
 	case "all":
-		return all, nil
+		var routine []Scenario
+		for _, sc := range all {
+			if !strings.HasPrefix(sc.Name, "stress-") {
+				routine = append(routine, sc)
+			}
+		}
+		return routine, nil
+	case "stress":
+		sel = "stress-duplex,stress-upload-eof,stress-download"
 	case "quick":
 		sel = "tcp-upload,tcp-download,socks-echo-multi,tcp-download-lossy"
 	case "load":
@@ -457,6 +469,8 @@ func socksEcho(port int, host string, targetPort, seed, size int, deadline time.
 		return 0, err
 	}
 	defer conn.Close()
+	progress := &streamMeter{seed: seed, last: time.Now()}
+	defer func() { meter.recordStream(progress) }()
 	_ = conn.SetDeadline(deadline)
 	if err := socksConnect(conn, host, targetPort); err != nil {
 		return 0, err
@@ -471,7 +485,7 @@ func socksEcho(port int, host string, targetPort, seed, size int, deadline time.
 		writeErr <- err
 	}()
 	got := sha256.New()
-	n, err := io.CopyN(io.MultiWriter(got, meter), conn, int64(size))
+	n, err := io.CopyN(io.MultiWriter(got, meter, progress), conn, int64(size))
 	if err != nil {
 		return n, fmt.Errorf("echo read after %d of %d bytes: %w", n, size, err)
 	}
@@ -982,6 +996,7 @@ type deliveryMeter struct {
 	start, last time.Time
 	longest     time.Duration
 	buckets     []int64
+	streams     []StreamProgress
 }
 
 func (m *deliveryMeter) Write(b []byte) (int, error) {
@@ -1002,6 +1017,7 @@ func (m *deliveryMeter) Write(b []byte) (int, error) {
 func (m *deliveryMeter) finish(r *Result) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	r.StreamProgress = append([]StreamProgress(nil), m.streams...)
 	r.LongestDeliveryGapMs = float64(m.longest) / float64(time.Millisecond)
 	// Exclude the partial final second from percentiles, but retain its raw sample.
 	for _, b := range m.buckets {
@@ -1014,4 +1030,34 @@ func (m *deliveryMeter) finish(r *Result) {
 	sort.Float64s(values)
 	r.DownloadP10Mbps = values[(len(values)-1)/10]
 	r.DownloadMedianMbps = values[len(values)/2]
+}
+
+// Receiver progress survives failed streams; hashes remain the success gate.
+type StreamProgress struct {
+	Seed         int     `json:"seed"`
+	Bytes        int64   `json:"received_bytes"`
+	LongestGapMs float64 `json:"longest_gap_ms"`
+}
+type streamMeter struct {
+	seed    int
+	bytes   int64
+	last    time.Time
+	longest time.Duration
+}
+
+func (m *streamMeter) Write(b []byte) (int, error) {
+	now := time.Now()
+	if gap := now.Sub(m.last); gap > m.longest {
+		m.longest = gap
+	}
+	m.last = now
+	m.bytes += int64(len(b))
+	return len(b), nil
+}
+func (m *deliveryMeter) recordStream(s *streamMeter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Include the final read wait (including a timeout) in failure artifacts.
+	longest := max(s.longest, time.Since(s.last))
+	m.streams = append(m.streams, StreamProgress{Seed: s.seed, Bytes: s.bytes, LongestGapMs: float64(longest) / float64(time.Millisecond)})
 }
