@@ -77,3 +77,10 @@ mod tests {
         assert_eq!(state.current_base, min);
     }
 }
+
+/// Conservative evidence: eviction can delay repair, never invent loss.
+pub(crate) fn later_ack_count(state: &crate::state::ArqState, sn: u16, item: &crate::types::DataItem) -> usize {
+    let Some(sent_at) = item.last_sent_at else { return 0; };
+    state.ack_evidence.iter().rev().filter(|ack| seq_behind(ack.sn, sn)
+        && item.created_at <= ack.created_at && sent_at <= ack.sent_at).take(4).count()
+}

@@ -74,8 +74,8 @@ impl ArqLogger for DummyLogger {}
 #[derive(Debug, Clone)]
 pub(crate) struct DataItem {
     pub data: Vec<u8>,
-    /// Distinct later ACKs observed since the last transmission.
-    pub later_acks: u8,
+    pub nack_pending: bool,
+    pub retry_cause: Option<RetryCause>,
     pub created_at: Instant,
     pub last_sent_at: Option<Instant>,
     pub dispatched: bool,
@@ -117,10 +117,37 @@ pub(crate) struct AdaptiveRtoState {
     pub initialized: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AckEvidence {
+    pub sn: u16,
+    pub created_at: Instant,
+    pub sent_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RttBucket {
+    pub at: Instant,
+    pub maximum: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RetryCause { Timeout = 0, Early = 1, Nack = 2 }
+
+#[derive(Debug, Default)]
+pub(crate) struct RecoveryMetrics {
+    pub requested: [u64; 3],
+    pub queued: [u64; 3],
+    pub dispatched: [u64; 3],
+    pub coalesced: [u64; 3],
+    pub original: u64,
+    pub scans: u64,
+}
+
 pub(crate) struct RtxJob {
     pub sn: u16,
     pub sent_at: Instant,
     pub timed_out: bool,
+    pub nack: bool,
 }
 
 pub(crate) fn setup_control_packet_types() -> &'static HashMap<u8, ()> {

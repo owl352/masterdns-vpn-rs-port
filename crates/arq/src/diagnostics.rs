@@ -19,7 +19,7 @@ impl Arq {
                 let gap = sn.wrapping_sub(s.rcv_nxt);
                 (gap < 32768).then_some(gap)
             }).min();
-            format!("ARQ Snapshot session={} stream={} state={:?} snd_next={} pending={} queued={} oldest={:?} oldest_ms={} retries={} rcv_next={} buffered={} first_gap={:?} inbound={} writing={} writer_closed={} writer_broken={} close_read={}/{}/{} close_write={}/{}/{} drain={} waiting={} fast_acks={} reacks={} rto_ms={} srtt_ms={} nack_pending={}",
+            let line = format!("ARQ Snapshot session={} stream={} state={:?} snd_next={} pending={} queued={} oldest={:?} oldest_ms={} retries={} rcv_next={} buffered={} first_gap={:?} inbound={} writing={} writer_closed={} writer_broken={} close_read={}/{}/{} close_write={}/{}/{} drain={} waiting={} fast_acks={} reacks={} rto_ms={} srtt_ms={} nack_pending={}",
                 self.session_id, self.stream_id, s.state, s.snd_nxt, s.snd_buf.len(), s.queued_data,
                 oldest.map(|(sn, _)| *sn), oldest.map(|(_, i)| now.saturating_duration_since(i.created_at).as_millis()).unwrap_or(0),
                 oldest.map(|(_, i)| i.retries).unwrap_or(0), s.rcv_nxt, s.rcv_buf.len(), hole,
@@ -27,7 +27,10 @@ impl Arq {
                 s.close_read_sent, s.close_read_received, s.close_read_acked,
                 s.close_write_sent, s.close_write_received, s.close_write_acked,
                 s.deferred_close, s.waiting_ack_for, s.pending_fast_acks.len(), s.pending_reacks.len(),
-                s.data_adaptive_rto.current_base.as_millis(), s.data_adaptive_rto.srtt.as_millis(), s.last_data_nack_sent.len())
+                s.data_adaptive_rto.current_base.as_millis(), s.data_adaptive_rto.srtt.as_millis(), s.last_data_nack_sent.len());
+            format!("{} retry_requested={:?} retry_queued={:?} retry_dispatched={:?} retry_coalesced={:?} original_dispatched={} recovery_scans={}",
+                line, s.recovery.requested, s.recovery.queued, s.recovery.dispatched,
+                s.recovery.coalesced, s.recovery.original, s.recovery.scans)
         };
         self.logger.infof(&line);
     }

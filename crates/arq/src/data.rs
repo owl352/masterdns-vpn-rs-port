@@ -322,8 +322,9 @@ impl Arq {
         if s.pending_reacks.len() >= REACK_QUEUE_CAP {
             s.pending_reacks.pop_front();
         }
+        let needs_wake = s.pending_reacks.is_empty();
         s.pending_reacks.push_back((sn, now + REACK_DELAY));
-        self.reack_scheduled.notify_one();
+        if needs_wake { self.reack_scheduled.notify_one(); }
     }
 
     /// Emits every scheduled re-ACK whose delay has elapsed. Called from
@@ -380,8 +381,9 @@ impl Arq {
         if s.pending_fast_acks.len() >= REACK_QUEUE_CAP {
             s.pending_fast_acks.pop_front();
         }
+        let needs_wake = s.pending_fast_acks.is_empty();
         s.pending_fast_acks.push_back((sn, now + FAST_ACK_DELAY));
-        self.reack_scheduled.notify_one();
+        if needs_wake { self.reack_scheduled.notify_one(); }
     }
 
     /// Emits every scheduled fast ACK whose delay has elapsed, at the ACK's
@@ -431,7 +433,6 @@ impl Arq {
         let mut was_queued = false;
         let mut sample = std::time::Duration::ZERO;
         let mut sample_eligible = false;
-        let mut recovery_ready = false;
 
         {
             let mut s = self.inner.lock().unwrap();
@@ -448,21 +449,11 @@ impl Arq {
                 let acked_created_at = info.created_at;
                 let acked_sent_at = if info.dispatched && info.sample_eligible { info.last_sent_at } else { None };
                 s.snd_buf.remove(&sn);
-                // Only newly consumed ACKs count. Duplicates have no send-buffer
-                // entry and cannot manufacture loss evidence. Compare send
-                // times as well as wrapping sequence numbers to avoid treating
-                // a late ACK of a retransmission as evidence against new data.
-                if let Some(acked_sent_at) = acked_sent_at {
-                    for (&missing, item) in s.snd_buf.iter_mut() {
-                        if item.dispatched
-                            && crate::util::seq_behind(sn, missing)
-                            && item.created_at <= acked_created_at
-                            && item.last_sent_at.is_some_and(|at| at <= acked_sent_at)
-                        {
-                            recovery_ready |= item.later_acks == 3;
-                            item.later_acks = item.later_acks.saturating_add(1).min(4);
-                        }
-                    }
+                // Constant work per ACK. Evaluate bounded evidence in the
+                // scheduler rather than walking the entire send window here.
+                if let Some(sent_at) = acked_sent_at {
+                    if s.ack_evidence.len() == 16 { s.ack_evidence.pop_front(); }
+                    s.ack_evidence.push_back(crate::types::AckEvidence { sn, created_at: acked_created_at, sent_at });
                 }
                 if was_queued {
                     s.queued_data = s.queued_data.saturating_sub(1);
@@ -477,9 +468,6 @@ impl Arq {
             }
         }
 
-        if recovery_ready {
-            self.reack_scheduled.notify_one();
-        }
         if should_signal_window {
             self.window_not_full.notify_one();
         }

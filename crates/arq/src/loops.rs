@@ -282,7 +282,8 @@ async fn io_loop(arq: Arc<Arq>) {
                         sn,
                         crate::types::DataItem {
                             data: raw.clone(),
-                            later_acks: 0,
+                            nack_pending: false,
+                            retry_cause: None,
                             created_at: now,
                             last_sent_at: None,
                             dispatched: false,
@@ -537,7 +538,10 @@ async fn retransmit_loop(arq: Arc<Arq>) {
             if arq.enable_control_reliability && arq.control_rto < rto_factor {
                 rto_factor = arq.control_rto;
             }
-            let base_interval = (rto_factor / 3).max(Duration::from_millis(50));
+            let mut base_interval = (rto_factor / 3).max(Duration::from_millis(50));
+            if !s.snd_buf.is_empty() && s.data_adaptive_rto.initialized {
+                base_interval = base_interval.min(Duration::from_millis(50));
+            }
             let has_pending = !s.snd_buf.is_empty()
                 || (arq.enable_control_reliability && !s.control_snd_buf.is_empty())
                 || !s.pending_reacks.is_empty()

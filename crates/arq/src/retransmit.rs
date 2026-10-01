@@ -31,9 +31,11 @@ impl Arq {
         let drain_rto_cap = clamp_duration(Duration::from_secs(2), self.rto, self.max_rto);
 
         {
-            let s = self.inner.lock().unwrap();
+            let mut s = self.inner.lock().unwrap();
             draining = s.deferred_close || matches!(s.state, StreamState::Draining);
-            let reorder_grace = self.reorder_grace(&s);
+            let reorder_grace = self.reorder_grace(&s, now);
+            let mut next_due: Option<Instant> = None;
+            if self.diagnostic_tick.is_some() { s.recovery.scans += 1; }
             let data_base = self.current_data_base_rto(&s);
 
             for (&sn, info) in s.snd_buf.iter() {
@@ -61,8 +63,14 @@ impl Arq {
                 let last_sent = info.last_sent_at.unwrap_or(now);
                 let age = now.saturating_duration_since(last_sent);
                 let timed_out = age >= effective_rto;
-                let fast_due = info.later_acks >= 4 && age >= reorder_grace;
-                if !timed_out && !fast_due {
+                let evidence = later_ack_count(&s, sn, info) >= 4;
+                let fast_due = evidence && age >= reorder_grace;
+                let nack_due = info.nack_pending && age >= reorder_grace;
+                if s.data_adaptive_rto.initialized {
+                    let due = last_sent + if evidence || info.nack_pending { effective_rto.min(reorder_grace) } else { effective_rto };
+                    next_due = Some(next_due.map_or(due, |d| d.min(due)));
+                }
+                if !timed_out && !fast_due && !nack_due {
                     continue;
                 }
 
@@ -70,8 +78,10 @@ impl Arq {
                     sn,
                     sent_at: last_sent,
                     timed_out,
+                    nack: nack_due && !timed_out,
                 });
             }
+            s.next_retry_due = next_due;
         }
 
         if ttl_expired {
@@ -88,7 +98,7 @@ impl Arq {
         jobs.sort_by_key(|j| j.sent_at);
         jobs.truncate((self.window_size / 10).clamp(1, 32));
         for j in &jobs {
-            self.queue_data_retry(j.sn, now, Some(j.sent_at), j.timed_out, false);
+            self.queue_data_retry(j.sn, now, Some(j.sent_at), j.timed_out, j.nack);
         }
 
         if self.enable_control_reliability {
@@ -105,29 +115,19 @@ impl Arq {
         if !s.data_adaptive_rto.initialized {
             return None;
         }
-        let grace = self.reorder_grace(&s);
-        let draining = s.deferred_close || matches!(s.state, StreamState::Draining);
-        let cap = clamp_duration(Duration::from_secs(2), self.rto, self.max_rto);
-        s.snd_buf
-            .values()
-            .filter(|item| item.dispatched)
-            .filter_map(|item| {
-                let at = item.last_sent_at?;
-                let timeout = item.current_rto.max(self.current_data_base_rto(&s));
-                let timeout = if draining { timeout.min(cap) } else { timeout };
-                Some(at + if item.later_acks >= 4 { timeout.min(grace) } else { timeout })
-            })
-            .min()
+        s.next_retry_due
     }
 
-    fn reorder_grace(&self, s: &crate::state::ArqState) -> Duration {
+    fn reorder_grace(&self, s: &crate::state::ArqState, now: Instant) -> Duration {
         let rtt = &s.data_adaptive_rto;
         if !rtt.initialized {
             return self.rto;
         }
         // Four later ACKs alone are not loss evidence on mixed resolvers.
         // Allow a complete RTT plus its observed jitter before early repair.
-        (rtt.srtt + rtt.rttvar * 4).max(Duration::from_millis(100)).min(self.max_rto)
+        let tail = s.rtt_tail.iter().filter(|b| now.saturating_duration_since(b.at) < Duration::from_secs(2))
+            .map(|b| b.maximum).max().unwrap_or(Duration::ZERO);
+        (rtt.srtt + rtt.rttvar * 4).max(tail + tail / 4).max(Duration::from_millis(100)).min(self.max_rto)
     }
 
     /// Reserve a retry before enqueueing it, shared by timeout, early recovery
@@ -139,6 +139,9 @@ impl Arq {
             if s.closed || s.rst_sent || s.rst_received {
                 return false;
             }
+            let cause = if timed_out { crate::types::RetryCause::Timeout } else if nack { crate::types::RetryCause::Nack } else { crate::types::RetryCause::Early };
+            let grace = self.reorder_grace(&s, now);
+            if self.diagnostic_tick.is_some() { s.recovery.requested[cause as usize] += 1; }
             let floor = self.current_data_base_rto(&s);
             let ceiling = if s.deferred_close || matches!(s.state, StreamState::Draining) {
                 self.max_rto.min(clamp_duration(Duration::from_secs(2), self.rto, self.max_rto))
@@ -152,6 +155,12 @@ impl Arq {
                 return false;
             };
             if !item.dispatched || expected_sent.is_some_and(|at| item.last_sent_at != Some(at)) {
+                if self.diagnostic_tick.is_some() { s.recovery.coalesced[cause as usize] += 1; }
+                return false;
+            }
+            if !timed_out && item.retries > 0 && item.last_sent_at.is_some_and(|at| now.saturating_duration_since(at) < grace) {
+                if nack { item.nack_pending = true; }
+                if self.diagnostic_tick.is_some() { s.recovery.coalesced[cause as usize] += 1; }
                 return false;
             }
             if nack
@@ -164,7 +173,8 @@ impl Arq {
             let previous = item.clone();
             item.dispatched = false;
             item.sample_eligible = false;
-            item.later_acks = 0;
+            item.nack_pending = false;
+            item.retry_cause = Some(cause);
             item.retries += 1;
             if nack {
                 item.last_nack_sent_at = Some(now);
@@ -197,6 +207,10 @@ impl Arq {
             self.data_dequeued.notify_one();
             self.note_drain_queue_failure(now);
             return false;
+        }
+        if self.diagnostic_tick.is_some() {
+            let cause = if timed_out { crate::types::RetryCause::Timeout } else if nack { crate::types::RetryCause::Nack } else { crate::types::RetryCause::Early };
+            self.inner.lock().unwrap().recovery.queued[cause as usize] += 1;
         }
         // An ACK may have arrived between reservation and enqueue. Remove
         // its stale queued retry; the response path also filters stale data.

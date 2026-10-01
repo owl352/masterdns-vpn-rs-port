@@ -1,7 +1,7 @@
 //! Mutable ARQ state, guarded by a single mutex in [`crate::Arq`] (mirrors the
 //! fields Go guards with `ARQ.mu`).
 
-use crate::types::{AdaptiveRtoState, ControlItem, DataItem, StreamState};
+use crate::types::{AckEvidence, AdaptiveRtoState, ControlItem, DataItem, RecoveryMetrics, RttBucket, StreamState};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -20,6 +20,10 @@ pub(crate) struct ArqState {
     /// sitting in the TX queue waiting for the peer to pull them. Drives the
     /// read pacing in `loops::io_loop`.
     pub queued_data: usize,
+    pub ack_evidence: VecDeque<AckEvidence>,
+    pub rtt_tail: VecDeque<RttBucket>,
+    pub next_retry_due: Option<Instant>,
+    pub recovery: RecoveryMetrics,
     pub rcv_buf: FxHashMap<u16, Vec<u8>>,
     /// key: `ptype << 24 | sn << 8 | fragID`
     pub control_snd_buf: FxHashMap<u32, ControlItem>,
@@ -106,6 +110,10 @@ impl ArqState {
             rcv_highest: 0,
             snd_buf: FxHashMap::default(),
             queued_data: 0,
+            ack_evidence: VecDeque::with_capacity(16),
+            rtt_tail: VecDeque::with_capacity(8),
+            next_retry_due: None,
+            recovery: RecoveryMetrics::default(),
             rcv_buf: FxHashMap::default(),
             control_snd_buf: FxHashMap::default(),
             state: StreamState::Open,

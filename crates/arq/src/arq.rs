@@ -197,6 +197,17 @@ impl Arq {
 
     pub(crate) fn note_successful_data_sample(&self, sample: Duration) {
         let mut s = self.inner.lock().unwrap();
+        let now = Instant::now();
+        while s.rtt_tail.front().is_some_and(|b| now.saturating_duration_since(b.at) >= Duration::from_secs(2)) {
+            s.rtt_tail.pop_front();
+        }
+        let sample = sample.min(self.max_rto);
+        if let Some(bucket) = s.rtt_tail.back_mut().filter(|b| now.saturating_duration_since(b.at) < Duration::from_millis(250)) {
+            bucket.maximum = bucket.maximum.max(sample);
+        } else {
+            if s.rtt_tail.len() == 8 { s.rtt_tail.pop_front(); }
+            s.rtt_tail.push_back(RttBucket { at: now, maximum: sample });
+        }
         s.data_adaptive_rto = update_adaptive_rto(s.data_adaptive_rto, sample, self.rto, self.max_rto);
     }
 
@@ -212,12 +223,20 @@ impl Arq {
         match packet_type {
             enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND => {
                 let mut was_queued = false;
+                let mut cause = None;
+                let mut original = false;
                 if let Some(info) = s.snd_buf.get_mut(&sequence_num) {
                     info.last_sent_at = Some(now);
                     was_queued = !info.dispatched;
+                    original = info.retries == 0;
+                    cause = info.retry_cause;
                     info.dispatched = true;
                 }
                 if was_queued {
+                    if self.diagnostic_tick.is_some() {
+                        if original { s.recovery.original += 1; }
+                        if let Some(cause) = cause { s.recovery.dispatched[cause as usize] += 1; }
+                    }
                     s.queued_data = s.queued_data.saturating_sub(1);
                     drop(s);
                     self.data_dequeued.notify_one();
@@ -595,6 +614,8 @@ pub(crate) fn control_key(packet_type: u8, sequence_num: u16, fragment_id: u8) -
 }
 
 pub(crate) fn clear_all_queues(state: &mut ArqState, clear_control: bool, window_not_full: &Notify) {
+    state.ack_evidence.clear();
+    state.next_retry_due = None;
     state.snd_buf = FxHashMap::default();
     state.queued_data = 0;
     state.rcv_buf = FxHashMap::default();
@@ -616,6 +637,8 @@ pub(crate) fn clear_outbound_state_locked(state: &mut ArqState, clear_control: b
         enqueuer.remove_queued_data_nack(sn);
     }
 
+    state.ack_evidence.clear();
+    state.next_retry_due = None;
     state.snd_buf = FxHashMap::default();
     state.queued_data = 0;
     if clear_control {

@@ -556,7 +556,8 @@ fn recovery_fixture(first: u16, age: Duration, count: u16) -> (std::sync::Arc<cr
             sn,
             DataItem {
                 data: vec![offset as u8],
-                later_acks: 0,
+                nack_pending: false,
+                retry_cause: None,
                 created_at: now - age,
                 last_sent_at: Some(if offset == 0 { now - age } else { now - Duration::from_millis(10) }),
                 dispatched: true,
@@ -580,7 +581,7 @@ fn fast_recovery_requires_distinct_acks_and_reorder_grace() {
     for _ in 0..10 {
         assert!(!arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
     }
-    assert_eq!(arq.inner.lock().unwrap().snd_buf[&0].later_acks, 1);
+    { let s = arq.inner.lock().unwrap(); assert_eq!(crate::util::later_ack_count(&s, 0, &s.snd_buf[&0]), 1); }
     for sn in 2..=4 {
         assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn));
     }
@@ -693,7 +694,7 @@ fn retransmitted_ack_cannot_manufacture_fresh_loss_evidence() {
         for sn in 1..=4 { s.snd_buf.get_mut(&sn).unwrap().sample_eligible = false; }
     }
     for sn in 1..=4 { assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn)); }
-    assert_eq!(arq.inner.lock().unwrap().snd_buf[&0].later_acks, 0);
+    assert!(arq.inner.lock().unwrap().ack_evidence.is_empty());
 }
 
 #[test]
@@ -703,7 +704,10 @@ fn jitter_grace_defers_fast_retry_and_stale_job_cannot_requeue_new_send() {
         let mut s = arq.inner.lock().unwrap();
         s.data_adaptive_rto.srtt = Duration::from_millis(200);
         s.data_adaptive_rto.rttvar = Duration::from_millis(100);
-        s.snd_buf.get_mut(&0).unwrap().later_acks = 4;
+        let item = s.snd_buf[&0].clone();
+        for sn in 1..=4 { s.ack_evidence.push_back(crate::types::AckEvidence {
+            sn, created_at: item.created_at, sent_at: item.last_sent_at.unwrap(),
+        }); }
     }
     arq.check_retransmits();
     assert!(mock.pushed.lock().unwrap().is_empty());
@@ -733,6 +737,7 @@ fn exact_retry_deadline_waits_for_a_genuine_rtt_observation() {
     assert!(arq.next_data_retry_due().is_none());
     assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 1));
     assert!(arq.inner.lock().unwrap().data_adaptive_rto.initialized);
+    arq.check_retransmits();
     assert!(arq.next_data_retry_due().is_some());
 }
 
@@ -1001,4 +1006,85 @@ fn unreachable_peer_exhausts_data_recovery_then_closes_reset_wait() {
     arq.check_retransmits();
     assert!(arq.is_closed(), "a permanently unreachable peer must not keep reset wait alive indefinitely");
     assert!(arq.cancel_token.is_cancelled());
+}
+
+#[test]
+#[ignore = "release-mode ACK cost benchmark; run explicitly"]
+fn ack_window_cost_benchmark() {
+    use std::time::Instant;
+    for window in [300u16, 1000, 8000] {
+        let rounds = 20;
+        let mut elapsed = Duration::ZERO;
+        for _ in 0..rounds {
+            let (arq, _) = recovery_fixture(0, Duration::from_millis(20), window);
+            let start = Instant::now();
+            for sn in 0..window { assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn)); }
+            elapsed += start.elapsed();
+        }
+        println!("ack_bench window={} ns_per_ack={:.1}", window, elapsed.as_nanos() as f64 / (rounds as f64 * window as f64));
+    }
+}
+
+#[tokio::test]
+async fn later_ack_timer_entries_do_not_wake_recovery_for_every_packet() {
+    let mock = std::sync::Arc::new(MockEnqueuer::default());
+    mock.set_has_backlog(true);
+    let arq = crate::Arq::new(102, 1, mock, 1000, None, Config::default());
+    arq.receive_data(0, b"first");
+    tokio::time::timeout(Duration::from_millis(10), arq.reack_scheduled.notified()).await.unwrap();
+    arq.receive_data(1, b"second");
+    assert!(tokio::time::timeout(Duration::from_millis(2), arq.reack_scheduled.notified()).await.is_err());
+    let s = arq.inner.lock().unwrap();
+    assert_eq!(s.pending_fast_acks.len(), 2);
+    assert_eq!(s.pending_reacks.len(), 2);
+}
+
+#[test]
+fn recent_slow_rtt_prevents_fast_path_from_repairing_benign_reordering() {
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(200), 5);
+    arq.note_successful_data_sample(Duration::from_millis(250));
+    for _ in 0..100 { arq.note_successful_data_sample(Duration::from_millis(20)); }
+    for sn in 1..=4 { assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn)); }
+    arq.check_retransmits();
+    assert!(mock.pushed.lock().unwrap().is_empty());
+    assert_eq!(arq.inner.lock().unwrap().rtt_tail.len(), 1, "tail buckets are time-based, not evicted by fast ACK count");
+    arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, 0);
+    assert!(mock.pushed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn nack_after_early_repair_is_deferred_until_shared_cooldown() {
+    use std::time::Instant;
+    let (arq, mock) = recovery_fixture(0, Duration::from_millis(300), 5);
+    for sn in 1..=4 { arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, sn); }
+    arq.check_retransmits();
+    arq.note_tx_packet_dequeued(enums::PACKET_STREAM_RESEND, 0, 0);
+    assert!(!arq.handle_data_nack(0));
+    assert!(arq.inner.lock().unwrap().snd_buf[&0].nack_pending);
+    arq.check_retransmits();
+    assert_eq!(mock.pushed.lock().unwrap().len(), 1);
+    arq.inner.lock().unwrap().snd_buf.get_mut(&0).unwrap().last_sent_at = Some(Instant::now() - Duration::from_millis(200));
+    arq.check_retransmits();
+    assert_eq!(mock.pushed.lock().unwrap().len(), 2, "deferred NACK must not be silently lost");
+    assert!(!arq.inner.lock().unwrap().snd_buf[&0].nack_pending);
+}
+
+#[test]
+fn bounded_ack_history_never_exceeds_reference_evidence_across_wrap() {
+    for first in [0, 65510] {
+        let (arq, _) = recovery_fixture(first, Duration::from_millis(300), 64);
+        let mut order: Vec<u16> = (1..64).collect();
+        for i in 0..order.len() { let j = (i * 29 + 17) % order.len(); order.swap(i, j); }
+        for (count, offset) in order.into_iter().enumerate() {
+            assert!(arq.receive_ack(enums::PACKET_STREAM_DATA_ACK, first.wrapping_add(offset)));
+            let s = arq.inner.lock().unwrap();
+            let evidence = crate::util::later_ack_count(&s, first, &s.snd_buf[&first]);
+            assert!(evidence <= (count + 1).min(4));
+            assert!(s.ack_evidence.len() <= 16);
+            if count >= 3 { assert_eq!(evidence, 4); }
+        }
+        arq.note_tx_packet_dequeued(enums::PACKET_STREAM_RESEND, first, 0);
+        let s = arq.inner.lock().unwrap();
+        assert_eq!(crate::util::later_ack_count(&s, first, &s.snd_buf[&first]), 0, "old evidence cannot trigger a new send epoch");
+    }
 }
