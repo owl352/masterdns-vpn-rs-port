@@ -555,6 +555,7 @@ fn recovery_fixture(first: u16, age: Duration, count: u16) -> (std::sync::Arc<cr
         s.snd_buf.insert(
             sn,
             DataItem {
+                logical_seq: None,
                 data: vec![offset as u8],
                 nack_pending: false,
                 retry_cause: None,
@@ -1087,4 +1088,378 @@ fn bounded_ack_history_never_exceeds_reference_evidence_across_wrap() {
         let s = arq.inner.lock().unwrap();
         assert_eq!(crate::util::later_ack_count(&s, first, &s.snd_buf[&first]), 0, "old evidence cannot trigger a new send epoch");
     }
+}
+
+fn logical_fixture(first:u32,count:u16,dispatched:bool)->(std::sync::Arc<crate::Arq>,std::sync::Arc<MockEnqueuer>) {
+    let (a,m)=recovery_fixture(first as u16,Duration::from_secs(2),count);
+    let mut s=a.inner.lock().unwrap();
+    let mut t=crate::transport::TransportState::new(2000,64);
+    t.send_ack=first;t.send_next=first+count as u32;
+    for offset in 0..count {
+        let seq=first+offset as u32;
+        t.ledger.insert(seq,crate::transport::Dispatch{dispatched,acked:false,..Default::default()});
+        let item=s.snd_buf.get_mut(&(seq as u16)).unwrap();item.logical_seq=Some(seq);item.dispatched=dispatched;
+        item.last_sent_at=Some(std::time::Instant::now()-Duration::from_secs(2));
+    }
+    s.snd_nxt=t.send_next as u16;s.queued_data=if dispatched{0}else{count as usize};s.transport=Some(t);
+    drop(s);(a,m)
+}
+
+#[test]
+fn logical_feedback_cannot_retire_unsent_or_alias_prior_epoch() {
+    let(a,_)=logical_fixture(65536,3,false);
+    assert!(!a.validate_logical_feedback(65537,&[],&[]));
+    assert!(!a.apply_logical_feedback(65536,&[crate::LogicalRange{offset:1,length:1}],&[]));
+    assert!(!a.receive_ack(enums::PACKET_STREAM_DATA_ACK,0));
+    assert!(!a.handle_data_nack(0));assert!(a.has_pending_sequence(0));
+    assert!(a.apply_logical_feedback(0,&[crate::LogicalRange{offset:1,length:2}],&[]));
+    assert_eq!(a.inner.lock().unwrap().snd_buf.len(),3);
+    a.note_logical_dispatched(65536,enums::PACKET_STREAM_DATA);
+    assert!(a.apply_logical_feedback(65537,&[],&[]));assert!(!a.has_pending_sequence(0));
+    assert!(a.has_pending_sequence(1));
+}
+
+#[test]
+fn selective_tombstones_bound_span_and_duplicate_feedback_is_idempotent() {
+    let(a,_)=logical_fixture(65536,4,true);
+    let sack=[crate::LogicalRange{offset:1,length:3}];
+    assert!(a.apply_logical_feedback(65536,&sack,&[]));assert_eq!(a.inner.lock().unwrap().snd_buf.len(),1);
+    assert!(a.apply_logical_feedback(65536,&sack,&[]));
+    {
+        let s=a.inner.lock().unwrap();let t=s.transport.as_ref().unwrap();
+        assert_eq!(t.ledger.len(),4);assert!(t.ledger.get(&65537).unwrap().acked);
+    }
+    assert!(a.apply_logical_feedback(65540,&[],&[]));
+    assert_eq!(a.inner.lock().unwrap().snd_buf.len(),0);assert!(a.inner.lock().unwrap().transport.as_ref().unwrap().ledger.is_empty());
+    assert!(a.apply_logical_feedback(65536,&sack,&[]));
+}
+
+#[test]
+fn stored_ack_is_independent_of_writer_and_far_holes_use_ranges() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());
+    let a=crate::Arq::new(5,1,m.clone(),150,None,Config{window_size:2000,transport_serial_span:2000,transport_feedback_budget:64,data_nack_max_gap:824,..Default::default()});
+    assert!(a.receive_logical_data(1500,b"later"));
+    let now=std::time::Instant::now();
+    let c=a.claim_feedback(now,64,true).unwrap();
+    assert_eq!(c.ack_next,0);assert_eq!(c.sacks,vec![crate::LogicalRange{offset:1500,length:1}]);
+    assert_eq!(c.repairs,vec![crate::LogicalRange{offset:0,length:1500}]);
+    assert!(a.receive_logical_data(0,b"first"));
+    a.commit_feedback(&c,now);assert!(a.inner.lock().unwrap().transport.as_ref().unwrap().dirty);
+    let fresh=a.claim_feedback(now,64,true).unwrap();assert_eq!(fresh.ack_next,1);
+    assert_eq!(a.inner.lock().unwrap().rcv_nxt,0);
+    assert!(!a.receive_data(1,b"untagged"));
+    assert!(a.receive_logical_data(0,b"duplicate"));assert_eq!(a.inner.lock().unwrap().rcv_buf.get(&0).unwrap(),b"first");
+    assert!(m.pushed.lock().unwrap().is_empty()); // No legacy ACK/NACK leaked.
+}
+
+#[test]
+fn explicit_repairs_bound_enqueue_work_and_preserve_karn_on_sack_of_retry() {
+    let(a,m)=logical_fixture(0,1000,true);
+    assert!(a.apply_logical_feedback(0,&[],&[crate::LogicalRange{offset:0,length:1000}]));
+    assert_eq!(m.pushed.lock().unwrap().len(),32);
+    {
+        let s=a.inner.lock().unwrap();assert!(!s.snd_buf.get(&1).unwrap().dispatched);
+        assert!(!s.snd_buf.get(&1).unwrap().sample_eligible);assert!(s.snd_buf.get(&999).unwrap().nack_pending);
+    }
+    assert!(a.apply_logical_feedback(0,&[crate::LogicalRange{offset:1,length:1}],&[]));
+    assert!(!a.has_pending_sequence(1));
+}
+
+#[tokio::test]
+async fn negotiated_io_reserves_envelope_and_feedback_and_drains_eof() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());
+    let a=crate::Arq::new(6,1,m.clone(),100,None,Config{transport_serial_span:300,transport_feedback_budget:64,..Default::default()});
+    a.start();let(mut app,conn)=tokio::io::duplex(4096);a.set_local_conn(conn);
+    app.write_all(&[42;80]).await.unwrap();app.shutdown().await.unwrap();
+    wait_for_push(&m,enums::PACKET_STREAM_DATA).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let data:Vec<_>=m.pushed.lock().unwrap().iter().filter(|(kind,_,_)|*kind==enums::PACKET_STREAM_DATA).cloned().collect();
+    assert_eq!(data.len(),2);assert!(data.iter().all(|(_,_,b)|b.len()<=75));
+    assert!(!a.apply_logical_feedback(2,&[],&[]));
+    for(_,sn,_) in data {a.note_logical_dispatched(sn as u32,enums::PACKET_STREAM_DATA);}
+    assert!(a.apply_logical_feedback(2,&[],&[]));
+    wait_for_push(&m,enums::PACKET_STREAM_CLOSE_READ).await;
+    a.close("test",CloseOptions::default());
+}
+
+#[test]
+fn minimum_feedback_budget_rotates_repairs_and_far_sacks() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());
+    let a=crate::Arq::new(7,1,m,100,None,Config{window_size:2000,transport_serial_span:2000,transport_feedback_budget:14,data_nack_max_gap:824,..Default::default()});
+    assert!(a.receive_logical_data(1500,b"later"));
+    let now=std::time::Instant::now();
+    let first=a.claim_feedback(now,14,true).unwrap();assert_eq!(first.repairs.len(),1);assert!(first.sacks.is_empty());
+    a.commit_feedback(&first,now);
+    let next=now+Duration::from_millis(110);
+    let second=a.claim_feedback(next,14,true).unwrap();assert!(second.repairs.is_empty());assert_eq!(second.sacks[0].offset,1500);
+    assert_eq!(a.encode_feedback_claim(&second).len(),14);
+    a.commit_feedback(&second,next);
+    let third=a.claim_feedback(next+Duration::from_millis(110),14,true).unwrap();assert_eq!(third.repairs.len(),1);
+}
+
+#[test]
+fn feedback_before_socket_ticket_success_defers_without_unsent_retirement() {
+    let(a,_)=logical_fixture(65536,2,false);
+    assert!(!a.apply_logical_feedback(65538,&[],&[]));
+    assert!(a.note_logical_write_pending(65536));
+    // The second generation is still queued-never-claimed, so the whole record rejects.
+    assert!(!a.apply_logical_feedback(65538,&[],&[]));
+    assert!(a.note_logical_write_pending(65537));
+    assert_eq!(a.logical_feedback_status(65538,&[],&[]),crate::LogicalFeedbackStatus::WritePending);
+    assert!(a.apply_logical_feedback(65538,&[],&[]));
+    assert_eq!(a.inner.lock().unwrap().snd_buf.len(),2);
+    // Reordered successful writes cannot retire either entry until both succeed.
+    a.note_logical_dispatched(65537,enums::PACKET_STREAM_DATA);
+    assert_eq!(a.inner.lock().unwrap().snd_buf.len(),2);
+    a.note_logical_dispatched(65536,enums::PACKET_STREAM_DATA);
+    assert!(a.inner.lock().unwrap().snd_buf.is_empty());
+    assert!(a.inner.lock().unwrap().transport.as_ref().unwrap().ledger.is_empty());
+}
+
+#[test]
+fn failed_socket_write_cancels_deferred_ack_instead_of_acking_future_retry() {
+    let(a,_)=logical_fixture(0,1,false);
+    assert!(a.note_logical_write_pending(0));assert!(a.apply_logical_feedback(1,&[],&[]));
+    a.cancel_logical_write(0);assert!(a.has_pending_sequence(0));
+    assert!(!a.validate_logical_feedback(1,&[],&[]));
+    assert!(a.note_logical_write_pending(0));a.note_logical_dispatched(0,enums::PACKET_STREAM_DATA);
+    assert!(a.has_pending_sequence(0)); // No old unsent ACK silently survived failure.
+    assert!(a.apply_logical_feedback(1,&[],&[]));assert!(!a.has_pending_sequence(0));
+}
+
+#[test]
+fn discarded_receive_data_cannot_generate_new_selective_feedback() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());
+    let a=crate::Arq::new(8,1,m,150,None,Config{transport_serial_span:300,transport_feedback_budget:64,..Default::default()});
+    assert!(a.receive_logical_data(1,b"buffered"));
+    assert!(a.claim_feedback(std::time::Instant::now(),64,true).is_some());
+    a.mark_local_writer_broken("test");
+    assert!(a.claim_feedback(std::time::Instant::now(),64,true).is_none());assert!(a.next_feedback_due().is_none());
+}
+
+#[tokio::test]
+async fn negotiated_duplex_eof_survives_independent_delayed_feedback_lanes() {
+    use std::sync::Arc;
+    use std::time::Instant;
+    struct Flight {from_a:bool,kind:u8,seq:u32,data:Vec<u8>,feedback:Option<crate::FeedbackClaim>,due:Instant}
+    let ma=Arc::new(MockEnqueuer::default());let mb=Arc::new(MockEnqueuer::default());
+    let cfg=Config{window_size:1000,transport_serial_span:2000,transport_feedback_budget:64,enable_control_reliability:true,
+        rto:0.2,data_nack_max_gap:824,data_nack_initial_delay_seconds:0.15,data_nack_repeat_seconds:0.2,..Default::default()};
+    let a=crate::Arq::new(1,1,ma.clone(),150,None,Config{is_client:true,..cfg.clone()});
+    let b=crate::Arq::new(1,1,mb.clone(),800,None,cfg);a.start();b.start();
+    let(mut appa,conna)=tokio::io::duplex(128*1024);let(mut appb,connb)=tokio::io::duplex(128*1024);
+    a.set_local_conn(conna);b.set_local_conn(connb);
+    let expected:Vec<u8>=(0..65536).map(|n|(n%251) as u8).collect();let source=expected.clone();
+    let client=tokio::spawn(async move {appa.write_all(&source).await.unwrap();appa.shutdown().await.unwrap();let mut received=Vec::new();appa.read_to_end(&mut received).await.unwrap();received});
+    let echo=tokio::spawn(async move {let mut bytes=[0;4096];loop{let n=appb.read(&mut bytes).await.unwrap();if n==0{break;}appb.write_all(&bytes[..n]).await.unwrap();}appb.shutdown().await.unwrap();});
+    let mut flights:Vec<Flight>=Vec::new();let mut count=0usize;let deadline=Instant::now()+Duration::from_secs(5);
+    while !client.is_finished() && Instant::now()<deadline {
+        let now=Instant::now();
+        for (from_a,sender,mock) in [(true,&a,&ma),(false,&b,&mb)] {
+            let packets=std::mem::take(&mut *mock.pushed.lock().unwrap());
+            for(kind,sn,data) in packets {
+                let (seq,feedback)=if matches!(kind,enums::PACKET_STREAM_DATA|enums::PACKET_STREAM_RESEND) {
+                    if !sender.has_pending_sequence(sn){continue;}
+                    let seq=sender.logical_sequence(sn).unwrap();let feedback=sender.claim_feedback(now,14,true);
+                    sender.note_logical_dispatched(seq,kind);if let Some(f)=&feedback{sender.commit_feedback(f,now);}(seq,feedback)
+                }else if kind==enums::PACKET_STREAM_FEEDBACK {
+                    let Some(feedback)=sender.claim_feedback(now,64,true) else{continue};sender.commit_feedback(&feedback,now);(0,Some(feedback))
+                }else{sender.note_tx_packet_dequeued(kind,sn,0);(sn as u32,None)};
+                count+=1;let delay=if count%97==0{250}else if count%5==0{120}else{20};
+                flights.push(Flight{from_a,kind,seq,data,feedback,due:now+Duration::from_millis(delay)});
+            }
+        }
+        let mut pos=0;
+        while pos<flights.len() {
+            if flights[pos].due>now{pos+=1;continue;}
+            let p=flights.swap_remove(pos);let(receiver,ack_queue)=if p.from_a{(&b,&mb)}else{(&a,&ma)};
+            if let Some(f)=p.feedback {receiver.apply_logical_feedback(f.ack_next,&f.sacks,&f.repairs);}
+            match p.kind {
+                enums::PACKET_STREAM_DATA|enums::PACKET_STREAM_RESEND=>{receiver.receive_logical_data(p.seq,&p.data);}
+                enums::PACKET_STREAM_CLOSE_READ|enums::PACKET_STREAM_CLOSE_WRITE|enums::PACKET_STREAM_RST=>{
+                    if p.kind==enums::PACKET_STREAM_CLOSE_READ{
+                        assert_eq!(p.data.len(),4);assert!(receiver.receive_logical_eof(u32::from_be_bytes(p.data[..4].try_into().unwrap())));
+                    }
+                    else if p.kind==enums::PACKET_STREAM_CLOSE_WRITE{receiver.mark_close_write_received();}
+                    else{receiver.mark_rst_received();}
+                    ack_queue.push_tx_packet(0,enums::control_ack_for(p.kind).unwrap(),p.seq as u16,0,0,0,Duration::ZERO,&[]);
+                }
+                enums::PACKET_STREAM_FEEDBACK=>{}
+                kind=>{receiver.handle_ack_packet(kind,p.seq as u16,0);}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    if !client.is_finished() {
+        let ast=a.inner.lock().unwrap();let bst=b.inner.lock().unwrap();
+        panic!("delayed duplex stalled: a={} b={} a_pending={} b_pending={} a_rcv={} b_rcv={}",
+            ast.transport.as_ref().unwrap().diagnostic_fields(Instant::now()),bst.transport.as_ref().unwrap().diagnostic_fields(Instant::now()),
+            ast.snd_buf.len(),bst.snd_buf.len(),ast.rcv_buf.len(),bst.rcv_buf.len());
+    }
+    assert_eq!(client.await.unwrap(),expected);echo.await.unwrap();
+    a.close("test",CloseOptions::default());b.close("test",CloseOptions::default());
+}
+
+#[tokio::test]
+async fn logical_eof_before_tail_repairs_holes_and_waits_for_writer_boundary() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());
+    let a=crate::Arq::new(9,1,m,150,None,Config{transport_serial_span:600,transport_feedback_budget:64,data_nack_max_gap:824,..Default::default()});
+    a.start();let(mut app,conn)=tokio::io::duplex(4096);a.set_local_conn(conn);
+    assert!(a.receive_logical_eof(2));assert!(a.receive_logical_eof(2));assert!(!a.receive_logical_eof(3));
+    let c=a.claim_feedback(std::time::Instant::now(),64,true).unwrap();assert_eq!(c.repairs,vec![crate::LogicalRange{offset:0,length:2}]);
+    assert!(!a.receive_logical_data(2,b"beyond EOF"));
+    let mut byte=[0;1];assert!(tokio::time::timeout(Duration::from_millis(30),app.read(&mut byte)).await.is_err());
+    assert!(a.receive_logical_data(1,b"tail"));assert!(tokio::time::timeout(Duration::from_millis(30),app.read(&mut byte)).await.is_err());
+    assert!(a.receive_logical_data(0,b"head"));let mut bytes=Vec::new();
+    tokio::time::timeout(Duration::from_secs(1),app.read_to_end(&mut bytes)).await.unwrap().unwrap();assert_eq!(bytes,b"headtail");
+    a.close("test",CloseOptions::default());
+}
+
+#[test]
+fn logical_eof_rejects_future_span_and_data_already_beyond_endpoint() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());let a=crate::Arq::new(10,1,m,150,None,
+        Config{transport_serial_span:600,transport_feedback_budget:64,data_nack_max_gap:824,..Default::default()});
+    assert!(!a.receive_logical_eof(601));assert!(a.inner.lock().unwrap().transport.as_ref().unwrap().remote_eof.is_none());
+    assert!(a.receive_logical_data(5,b"observed"));assert!(!a.receive_logical_eof(5));assert!(a.receive_logical_eof(6));
+    let c=a.claim_feedback(std::time::Instant::now(),64,true).unwrap();assert_eq!(c.repairs,vec![crate::LogicalRange{offset:0,length:5}]);
+    assert_eq!(c.sacks,vec![crate::LogicalRange{offset:5,length:1}]);
+}
+
+#[test]
+fn negotiated_eof_payload_is_captured_once_and_legacy_body_stays_empty() {
+    let(a,m)=logical_fixture(65536,2,true);
+    a.emit_terminal_packet_with_ttl(enums::PACKET_STREAM_CLOSE_READ,"test",Duration::ZERO);
+    let pushed=m.pushed.lock().unwrap();let(_,sn,payload)=pushed.iter().find(|(kind,_,_)|*kind==enums::PACKET_STREAM_CLOSE_READ).unwrap();
+    assert_eq!(*sn,0);assert_eq!(payload,&65538u32.to_be_bytes());drop(pushed);
+    assert_eq!(a.inner.lock().unwrap().transport.as_ref().unwrap().local_eof,Some(65538));
+    let m=std::sync::Arc::new(MockEnqueuer::default());let legacy=crate::Arq::new(1,1,m.clone(),150,None,Config::default());
+    legacy.emit_terminal_packet_with_ttl(enums::PACKET_STREAM_CLOSE_READ,"test",Duration::ZERO);
+    assert!(m.pushed.lock().unwrap().iter().find(|(kind,_,_)|*kind==enums::PACKET_STREAM_CLOSE_READ).unwrap().2.is_empty());
+}
+
+#[tokio::test]
+async fn negotiated_eof_capture_fences_an_application_read_already_in_flight() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());let a=crate::Arq::new(11,1,m.clone(),150,None,
+        Config{transport_serial_span:600,transport_feedback_budget:64,..Default::default()});
+    a.start();let(mut app,conn)=tokio::io::duplex(4096);a.set_local_conn(conn);
+    for _ in 0..50 {if a.local_conn_read.lock().unwrap().is_none(){break;}tokio::time::sleep(Duration::from_millis(2)).await;}
+    assert!(a.local_conn_read.lock().unwrap().is_none());
+    a.close("test EOF",CloseOptions{send_close_read:true,..Default::default()});
+    app.write_all(b"late read bytes").await.unwrap();tokio::time::sleep(Duration::from_millis(10)).await;
+    let s=a.inner.lock().unwrap();assert!(s.snd_buf.is_empty());assert_eq!(s.transport.as_ref().unwrap().send_next,0);
+    assert_eq!(s.transport.as_ref().unwrap().local_eof,Some(0));drop(s);
+    assert!(!m.pushed.lock().unwrap().iter().any(|(kind,_,_)|*kind==enums::PACKET_STREAM_DATA));
+    a.close("test",CloseOptions::default());
+}
+
+#[test]
+fn disabled_explicit_repair_preserves_positive_sack_and_terminal_hole_knowledge() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());let a=crate::Arq::new(12,1,m,150,None,
+        Config{transport_serial_span:600,transport_feedback_budget:64,data_nack_max_gap:0,..Default::default()});
+    assert!(a.receive_logical_data(5,b"retained"));assert!(a.receive_logical_eof(10));
+    let c=a.claim_feedback(std::time::Instant::now(),64,true).unwrap();assert!(c.repairs.is_empty());
+    assert_eq!(c.sacks,vec![crate::LogicalRange{offset:5,length:1}]);
+    let s=a.inner.lock().unwrap();let t=s.transport.as_ref().unwrap();assert_eq!(t.holes.len(),9);assert_eq!(t.remote_eof,Some(10));assert!(t.repair_due.is_none());
+}
+
+#[test]
+fn eof_span_is_stored_ack_relative_without_granting_future_data_retention() {
+    let m=std::sync::Arc::new(MockEnqueuer::default());let a=crate::Arq::new(13,1,m,150,None,
+        Config{transport_serial_span:600,transport_feedback_budget:64,..Default::default()});
+    for seq in 0..600 {assert!(a.receive_logical_data(seq,b"held"));}
+    assert!(a.receive_logical_eof(1200)); // writer still0, storedACK600 + span600
+    assert!(!a.receive_logical_data(600,b"outside retained writer window"));
+    let s=a.inner.lock().unwrap();let t=s.transport.as_ref().unwrap();assert_eq!(t.holes.len(),600);assert_eq!(t.writer_next,0);assert_eq!(t.stored_ack,600);
+}
+
+#[test]
+fn stale_or_failed_retry_ticket_cannot_discard_valid_deferred_feedback() {
+    let(a,_)=logical_fixture(65536,2,false);a.note_logical_write_pending(65536);a.note_logical_write_pending(65537);
+    assert!(a.apply_logical_feedback(65538,&[],&[]));a.cancel_logical_write(0);
+    a.note_logical_dispatched(65536,enums::PACKET_STREAM_DATA);a.note_logical_dispatched(65537,enums::PACKET_STREAM_DATA);
+    assert!(a.inner.lock().unwrap().snd_buf.is_empty());
+    let(a,_)=logical_fixture(0,2,false);a.note_logical_dispatched(0,enums::PACKET_STREAM_DATA);a.note_logical_write_pending(1);
+    assert!(a.apply_logical_feedback(2,&[],&[]));a.cancel_logical_write(0);
+    a.note_logical_dispatched(1,enums::PACKET_STREAM_DATA);assert!(a.inner.lock().unwrap().snd_buf.is_empty());
+}
+
+#[test]
+fn coalesced_feedback_bounds_actual_karn_eligible_rtt_updates_to_eight() {
+    let(a,_)=logical_fixture(0,100,true);
+    assert!(a.apply_logical_feedback(100,&[],&[]));
+    let s=a.inner.lock().unwrap();assert_eq!(s.transport.as_ref().unwrap().rtt_samples,8);assert_eq!(s.ack_evidence.len(),16);assert!(s.snd_buf.is_empty());
+    drop(s);assert!(a.apply_logical_feedback(100,&[],&[]));assert_eq!(a.inner.lock().unwrap().transport.as_ref().unwrap().rtt_samples,8);
+    let(a,_)=logical_fixture(0,20,true);
+    {let mut s=a.inner.lock().unwrap();for sn in 0..15{s.snd_buf.get_mut(&sn).unwrap().sample_eligible=false;}}
+    assert!(a.apply_logical_feedback(20,&[],&[]));assert_eq!(a.inner.lock().unwrap().transport.as_ref().unwrap().rtt_samples,5);
+}
+
+#[test]
+fn resend_first_physical_write_keeps_original_queued_generation_encodable() {
+    let(a,m)=logical_fixture(65536,1,false);
+    // Existing ARQ makes a failed original enqueue timer-recoverable. This
+    // synthetic scheduler marker is NOT dispatched evidence in the ledger.
+    {let mut s=a.inner.lock().unwrap();s.snd_buf.get_mut(&0).unwrap().dispatched=true;s.queued_data=0;}
+    assert!(a.queue_data_retry(0,std::time::Instant::now(),None,true,false));
+    assert_eq!(m.pushed.lock().unwrap()[0].0,enums::PACKET_STREAM_RESEND);
+    assert_eq!(a.logical_sequence(0),Some(65536));assert!(!a.validate_logical_feedback(65537,&[],&[]));
+    assert!(a.note_logical_write_pending(65536));a.note_logical_dispatched(65536,enums::PACKET_STREAM_RESEND);
+    assert!(a.apply_logical_feedback(65537,&[],&[]));assert!(!a.has_pending_sequence(0));
+    assert_eq!(a.inner.lock().unwrap().transport.as_ref().unwrap().rtt_samples,0);
+}
+
+#[test]
+fn abort_and_final_close_release_modern_maps_without_losing_endpoint_replay() {
+    let(a,_)=logical_fixture(65536,2,false);
+    a.note_logical_write_pending(65536);a.note_logical_write_pending(65537);
+    assert!(a.apply_logical_feedback(65538,&[],&[]));
+    assert!(a.receive_logical_data(1,b"retained opposite direction"));assert!(a.receive_logical_eof(3));
+    let claim=a.claim_feedback(std::time::Instant::now(),64,true).unwrap();
+    a.emit_terminal_packet_with_ttl(enums::PACKET_STREAM_CLOSE_READ,"test",Duration::ZERO);
+    a.mark_close_write_received();
+    {
+        let s=a.inner.lock().unwrap();let t=s.transport.as_ref().unwrap();
+        assert!(t.ledger.is_empty());assert_eq!(t.deferred_feedback_count(),0);assert_eq!(t.send_ack,t.send_next);
+        assert_eq!(t.local_eof,Some(65538));assert_eq!(t.remote_eof,Some(3));
+        assert_eq!(t.stored.len(),1);assert_eq!(t.holes.len(),2);assert_eq!(s.rcv_buf.len(),1);
+    }
+    assert!(!a.has_pending_logical_sequence(65536));assert!(!a.note_logical_write_pending(65536));
+    a.note_logical_dispatched(65536,enums::PACKET_STREAM_DATA);a.note_logical_send_failed(65536);
+    assert_eq!(a.inner.lock().unwrap().queued_data,0);
+    a.close("test",CloseOptions::default());a.commit_feedback(&claim,std::time::Instant::now());
+    {
+        let s=a.inner.lock().unwrap();let t=s.transport.as_ref().unwrap();
+        assert!(t.ledger.is_empty() && t.stored.is_empty() && t.sack_ranges.is_empty() && t.repair_ranges.is_empty() && t.holes.is_empty());
+        assert_eq!(t.deferred_feedback_count(),0);assert!(!t.dirty);assert!(t.due.is_none() && t.reack.is_none() && t.repair_due.is_none());
+        assert_eq!(t.local_eof,Some(65538));assert_eq!(t.remote_eof,Some(3));
+    }
+    assert!(a.receive_logical_eof(3));assert!(!a.receive_logical_eof(4));
+}
+
+#[test]
+fn recently_resent_repairs_do_not_starve_later_holes() {
+    let(a,m)=logical_fixture(0,1000,true);
+    assert!(a.apply_logical_feedback(0,&[],&[crate::LogicalRange{offset:0,length:40}]));
+    assert_eq!(m.pushed.lock().unwrap().len(),32);
+    for seq in 0..32u32 { a.note_logical_dispatched(seq,enums::PACKET_STREAM_RESEND); }
+    // The first 32 were just resent; the same range must still reach 32..40.
+    assert!(a.apply_logical_feedback(0,&[],&[crate::LogicalRange{offset:0,length:40}]));
+    assert_eq!(m.pushed.lock().unwrap().len(),40);
+}
+
+#[test]
+fn explicit_repair_ignores_long_server_repeat_but_not_one_round_trip() {
+    let(a,m)=logical_fixture(0,10,true);
+    let range=[crate::LogicalRange{offset:0,length:1}];
+    assert!(a.apply_logical_feedback(0,&[],&range));
+    a.note_logical_dispatched(0,enums::PACKET_STREAM_RESEND);
+    assert!(a.apply_logical_feedback(0,&[],&range));
+    assert_eq!(m.pushed.lock().unwrap().len(),1,"resent within a round trip");
+    {
+        let mut s=a.inner.lock().unwrap();
+        let earlier=std::time::Instant::now()-Duration::from_millis(150);
+        let item=s.snd_buf.get_mut(&0).unwrap();item.last_sent_at=Some(earlier);item.last_nack_sent_at=Some(earlier);
+    }
+    assert!(a.apply_logical_feedback(0,&[],&range));
+    assert_eq!(m.pushed.lock().unwrap().len(),2,"explicit repair waited for the server repeat interval");
 }

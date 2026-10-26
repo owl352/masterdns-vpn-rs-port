@@ -21,6 +21,8 @@ use security::Codec;
 /// Payload starts immediately after the header check byte.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Packet {
+    /// Host-side queue generation ticket; never encoded in legacy framing.
+    pub logical_sequence: Option<u32>,
     pub session_id: u8,
     pub packet_type: u8,
     pub session_cookie: u8,

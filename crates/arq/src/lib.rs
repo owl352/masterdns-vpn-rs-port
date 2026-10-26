@@ -34,3 +34,6 @@ mod tests;
 
 pub use arq::Arq;
 pub use types::{ArqLogger, CloseOptions, Config, DummyLogger, PacketEnqueuer, StreamState};
+
+mod transport;
+pub use transport::{FeedbackClaim, LogicalFeedbackStatus, LogicalRange};

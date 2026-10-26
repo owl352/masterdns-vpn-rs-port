@@ -21,6 +21,7 @@ fn is_stream_creation_packet_type(t: u8) -> bool {
 /// runs on essentially every query that has a queued packet to send.
 fn vpn_packet_from_tx(p: ServerStreamTxPacket, stream_id: u16) -> vpnproto::Packet {
     vpnproto::Packet {
+        logical_sequence: p.logical_sequence,
         packet_type: p.packet_type,
         stream_id,
         sequence_num: p.sequence_num,
@@ -95,6 +96,7 @@ impl Server {
 
     pub(crate) fn purge_dns_query_fragments(&self, now: Instant) {
         self.dns_fragments.purge(now, self.dns_fragment_timeout);
+        self.datagram_fragments.purge(now, crate::datagram::DATAGRAM_ASSEMBLY);
     }
 
     pub(crate) fn remove_socks5_syn_fragments_for_session(&self, session_id: u8) {
@@ -119,6 +121,7 @@ impl Server {
     /// state and queues responses, but never itself produces *this* packet's
     /// DNS reply — `serve_queued_or_pong` does that afterward.
     pub(crate) fn handle_post_session_packet(&self, vpn_packet: &vpnproto::Packet, record: &SessionRuntimeView, now: Instant) -> bool {
+        if let Some(handled) = self.handle_transport_packet(vpn_packet, now) { return handled; }
         if self.reject_protocol_mismatched_syn(vpn_packet.packet_type) {
             return false;
         }
@@ -150,6 +153,7 @@ impl Server {
             enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND => self.handle_stream_data_request(p),
             enums::PACKET_STREAM_DATA_NACK => self.handle_stream_data_nack_request(p),
             enums::PACKET_DNS_QUERY_REQ => self.handle_dns_query_request(p, record, now),
+            enums::PACKET_UDP_DATAGRAM => self.handle_udp_datagram_request(p, now),
             enums::PACKET_STREAM_SYN => self.handle_stream_syn_request(p, record),
             enums::PACKET_SOCKS5_SYN => self.handle_socks5_syn_request(p, record),
             enums::PACKET_STREAM_CLOSE_READ => self.handle_stream_close_read_request(p),
@@ -309,7 +313,7 @@ impl Server {
 
         if !matches!(
             p.packet_type,
-            x if x == enums::PACKET_STREAM_DATA || x == enums::PACKET_STREAM_RESEND || x == enums::PACKET_DNS_QUERY_REQ || x == enums::PACKET_STREAM_SYN || x == enums::PACKET_SOCKS5_SYN
+            x if x == enums::PACKET_STREAM_DATA || x == enums::PACKET_STREAM_RESEND || x == enums::PACKET_DNS_QUERY_REQ || x == enums::PACKET_UDP_DATAGRAM || x == enums::PACKET_STREAM_SYN || x == enums::PACKET_SOCKS5_SYN
         ) {
             let _ = self.queue_immediate_control_ack(&record, p);
         }
@@ -349,6 +353,12 @@ impl Server {
                 total_fragments,
                 ..Default::default()
             };
+            // Negotiated CLOSE_READ needs its four-byte endpoint and cannot
+            // be represented by the retained seven-byte packed control layout.
+            if let Some(result) = self.handle_transport_packet(&block, now) {
+                handled |= result;
+                return true;
+            }
             if self.preprocess_inbound_packet(&block, now) {
                 handled = true;
                 return true;
@@ -760,9 +770,21 @@ impl Server {
     // `server_session.go`: serveQueuedOrPong, dequeueSessionResponse,
     // packControlBlocks, vpnPacketFromTX) ----
 
-    pub(crate) fn serve_queued_or_pong(&self, question_packet: &[u8], request_name: &str, record: &SessionRuntimeView, now: Instant) -> Option<Vec<u8>> {
+    pub(crate) fn serve_queued_or_pong(&self, question_packet: &[u8], request_name: &str, record: &SessionRuntimeView, now: Instant, feedback_stream: Option<u16>) -> Option<Vec<u8>> {
         if let Some(pkt) = self.dequeue_session_response(record.id, now) {
+            if self.sessions.get(record.id).is_some_and(|r| r.transport_active()) {
+                return self.build_transport_response(question_packet, request_name, record, pkt, now);
+            }
             return self.build_session_vpn_response(question_packet, request_name, record, pkt);
+        }
+        // Fresh upload ACK state can use this existing response opportunity
+        // instead of an otherwise empty PONG. Queued DATA/control above always
+        // wins, retaining duplex piggybacking and legacy scheduling unchanged.
+        if let Some(stream_id) = feedback_stream {
+            if let Some(response) = self.build_transport_response(question_packet, request_name, record,
+                vpnproto::Packet { packet_type: enums::PACKET_STREAM_FEEDBACK, stream_id, ..Default::default() }, now) {
+                return Some(response);
+            }
         }
         let payload = self.pong_payload();
         self.build_session_vpn_response(
@@ -777,6 +799,9 @@ impl Server {
         let record = self.sessions.get(session_id)?;
 
         if let Some(pkt) = record.dequeue_duplicated_packed_control_block() {
+            return Some(pkt);
+        }
+        if let Some(pkt) = record.pop_datagram(now) {
             return Some(pkt);
         }
         let rr_stream_id = record.rr_stream_id();
@@ -815,6 +840,7 @@ impl Server {
                 if let Some((p, _priority)) = record.orphan_queue.pop() {
                     selected_stream_id = p.stream_id;
                     item = Some(ServerStreamTxPacket {
+                        logical_sequence: None,
                         packet_type: p.packet_type,
                         sequence_num: p.sequence_num,
                         fragment_id: p.fragment_id,
@@ -839,9 +865,11 @@ impl Server {
                     }
                 }
                 if let Some((popped, _priority)) = stream.pop_next_tx_packet() {
-                    stream.note_tx_packet_dequeued(&popped);
+                    if !record.transport_active() || !matches!(popped.packet_type, enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND | enums::PACKET_STREAM_FEEDBACK) {
+                        stream.note_tx_packet_dequeued(&popped);
+                    }
                     let should_skip = (popped.packet_type == enums::PACKET_STREAM_DATA || popped.packet_type == enums::PACKET_STREAM_RESEND)
-                        && stream.arq().map(|a| !a.has_pending_sequence(popped.sequence_num)).unwrap_or(false);
+                        && stream.arq().map(|a| !a.has_pending_sequence(popped.sequence_num) || popped.logical_sequence.is_some_and(|seq| a.logical_sequence(popped.sequence_num) != Some(seq))).unwrap_or(false);
                     if should_skip {
                         continue;
                     }
@@ -977,7 +1005,7 @@ impl Server {
         vpnproto::Packet { packet_type: enums::PACKET_PACKED_CONTROL_BLOCKS, payload, stream_id: 0, has_stream_id: true, ..Default::default() }
     }
 
-    fn self_arc(&self) -> Arc<Server> {
+    pub(crate) fn self_arc(&self) -> Arc<Server> {
         // SAFETY-free approach: Server is always constructed via `Arc::new`
         // in `Server::new`; callers hand `Arc<Server>` into `runtime::run`.
         // Deferred closures need their own `Arc<Server>` clone, which we get

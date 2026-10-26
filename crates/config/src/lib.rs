@@ -76,6 +76,10 @@ pub struct ServerConfig {
     pub forward_port: u16,
     pub use_external_socks5: bool,
     pub socks5_auth: bool,
+    /// Relays client UDP datagrams (voice/video calls, games) when negotiated.
+    pub udp_relay_enabled: bool,
+    /// Lets relayed UDP reach loopback/private addresses. Testing only.
+    pub udp_relay_allow_private: bool,
     pub socks5_user: String,
     pub socks5_pass: String,
 
@@ -167,6 +171,8 @@ impl Default for ServerConfig {
             dns_cache_ttl_seconds: 300.0,
             use_external_socks5: false,
             socks5_auth: false,
+            udp_relay_enabled: true,
+            udp_relay_allow_private: false,
             socks5_user: "admin".to_string(),
             socks5_pass: "123456".to_string(),
             forward_ip: String::new(),
@@ -644,6 +650,8 @@ mod tests {
             forward_port: 0,
             use_external_socks5: false,
             socks5_auth: false,
+            udp_relay_enabled: true,
+            udp_relay_allow_private: false,
             socks5_user: "admin".to_string(),
             socks5_pass: "123456".to_string(),
             data_encryption_method: 1,

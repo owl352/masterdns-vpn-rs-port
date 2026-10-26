@@ -1062,3 +1062,54 @@ mod tests {
         assert!(encoded_qname_len(max_chars + 1, domain.len()) > MAX_DNS_NAME_LEN);
     }
 }
+
+/// Cached TXT-rdata budget of an uncompressed DATA unit at its tested payload
+/// capacity. The envelope uses exactly the same outer header extensions.
+pub fn tested_data_txt_budget(payload_capacity:usize,base64:bool)->usize {
+    let header=vpnproto::build_raw_header(&vpnproto::BuildHeaderOptions{packet_type:enums::PACKET_STREAM_DATA,..Default::default()}).expect("DATA header is valid");
+    let raw=header.as_slice().len()+payload_capacity;
+    let encoded=if base64 {basecodec::encoded_raw_base64_len(raw)} else {raw};
+    length_prefixed_txt_len(encoded)
+}
+/// Read the first TXT answer's actual encoded rdata length without copying the
+/// question, decoding the payload, or building a second full response.
+pub fn vpn_response_txt_wire_len(response:&[u8])->Option<usize> {
+    fn skip_name(bytes:&[u8],offset:&mut usize)->Option<()> {
+        let start=*offset;
+        loop {
+            let n=*bytes.get(*offset)?;*offset+=1;
+            if n==0{return Some(());}
+            if n&0xc0==0xc0 {*offset+=1;return (*offset<=bytes.len()).then_some(());}
+            if n&0xc0!=0 || n>63{return None;}
+            *offset=offset.checked_add(n as usize)?;
+            if *offset>bytes.len() || *offset-start>255{return None;}
+        }
+    }
+    if response.len()<12{return None;}
+    let questions=u16::from_be_bytes([response[4],response[5]]) as usize;
+    if u16::from_be_bytes([response[6],response[7]])!=1{return None;}
+    let mut offset=12;
+    for _ in 0..questions {skip_name(response,&mut offset)?;offset+=4;if offset>response.len(){return None;}}
+    skip_name(response,&mut offset)?;
+    let rr=response.get(offset..offset+10)?;
+    if u16::from_be_bytes([rr[0],rr[1]])!=enums::DNS_RECORD_TYPE_TXT{return None;}
+    let length=u16::from_be_bytes([rr[8],rr[9]]) as usize;
+    (offset+10+length<=response.len()).then_some(length)
+}
+
+#[cfg(test)]
+mod tested_budget_tests {
+    use super::*;
+    #[test]
+    fn cached_budget_matches_actual_full_encoding_at_boundaries() {
+        let question=build_txt_question_packet("test.example",enums::DNS_RECORD_TYPE_TXT,1232).unwrap();
+        for capacity in [1,14,40,150,246,255,500,1200,4096] {
+            for base64 in [false,true] {
+                let response=build_vpn_response_packet(&question,"test.example",&vpnproto::Packet{
+                    packet_type:enums::PACKET_STREAM_DATA,payload:vec![0;capacity],..Default::default()
+                },base64).unwrap();
+                assert_eq!(vpn_response_txt_wire_len(&response),Some(tested_data_txt_budget(capacity,base64)));
+            }
+        }
+    }
+}

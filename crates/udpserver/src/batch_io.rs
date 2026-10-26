@@ -56,7 +56,7 @@ impl RecvBatch {
         }
         // SAFETY: every header points at buffers owned by `self` that stay
         // alive and unaliased for the duration of the call.
-        let n = unsafe { libc::recvmmsg(fd, self.hdrs.as_mut_ptr(), BATCH as libc::c_uint, libc::MSG_DONTWAIT, std::ptr::null_mut()) };
+        let n = unsafe { libc::recvmmsg(fd, self.hdrs.as_mut_ptr(), BATCH as libc::c_uint, libc::MSG_DONTWAIT as _, std::ptr::null_mut()) };
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -95,7 +95,7 @@ pub(crate) fn send_batch(fd: RawFd, replies: &[(Vec<u8>, SocketAddr)]) -> io::Re
         .collect();
     // SAFETY: headers point into `addrs`, `iovs` and `replies`, all alive for
     // the call; the kernel only reads the payloads.
-    let n = unsafe { libc::sendmmsg(fd, hdrs.as_mut_ptr(), count as libc::c_uint, libc::MSG_DONTWAIT) };
+    let n = unsafe { libc::sendmmsg(fd, hdrs.as_mut_ptr(), count as libc::c_uint, libc::MSG_DONTWAIT as _) };
     if n < 0 {
         return Err(io::Error::last_os_error());
     }

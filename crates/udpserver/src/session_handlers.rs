@@ -168,6 +168,7 @@ impl Server {
         }
         self.deferred.remove_session(session_id);
         self.remove_dns_query_fragments_for_session(session_id);
+        self.close_udp_flows(session_id);
     }
 
     pub(crate) fn cleanup_stream_artifacts(&self, session_id: u8, stream_id: u16) {
@@ -259,7 +260,7 @@ pub(crate) fn handle_session_init_request(server: &Server, packet: &[u8], decisi
         ));
     }
 
-    let response_payload = vpnproto::encode_session_accept_payload(&vpnproto::SessionAcceptPayload {
+    let mut response_payload = vpnproto::encode_session_accept_payload(&vpnproto::SessionAcceptPayload {
         session_id: record.id,
         session_cookie: record.cookie,
         compression_pair: compression::pack_pair(record.upload_compression, record.download_compression),
@@ -280,13 +281,27 @@ pub(crate) fn handle_session_init_request(server: &Server, packet: &[u8], decisi
         has_client_policy_sync: true,
     });
 
-    dnsparser::build_vpn_response_packet(
+    // Keep the existing 2*window receive/reordering capacity. The reliable
+    // send-buffer count limit is unchanged; this bounds logical span/tombstones.
+    let server_window = server.cfg.arq_window_size.max(300).min(arq::MAX_WINDOW_SIZE);
+    let client_window = (server.cfg.max_allowed_client_arq_window_size.max(1) as usize).min(arq::MAX_WINDOW_SIZE);
+    let span = (2 * server_window).min(2 * client_window).min(vpnproto::TRANSPORT_MAX_SPAN as usize) as u16;
+    if let Some(offer) = record.prepare_transport_offer(span, server.cfg.udp_relay_enabled) {
+        response_payload.extend_from_slice(&offer.offer().ok()?);
+    }
+    let response = dnsparser::build_vpn_response_packet(
         packet,
         &decision.request_name,
-        &vpnproto::Packet { session_id: 0, packet_type: enums::PACKET_SESSION_ACCEPT, payload: response_payload, ..Default::default() },
+        &vpnproto::Packet { session_id: 0, packet_type: enums::PACKET_SESSION_ACCEPT, payload: response_payload.clone(), ..Default::default() },
         record.response_mode == crate::MTU_PROBE_MODE_BASE64,
-    )
-    .ok()
+    ).ok()?;
+    // Check the actual encoded response, using the cached tested DATA framing budget.
+    if dnsparser::vpn_response_txt_wire_len(&response)? <= record.download_txt_budget { return Some(response); }
+    record.transport.lock().unwrap().phase = crate::transport::Phase::Legacy;
+    response_payload.truncate(20);
+    dnsparser::build_vpn_response_packet(packet, &decision.request_name,
+        &vpnproto::Packet { packet_type: enums::PACKET_SESSION_ACCEPT, payload: response_payload, ..Default::default() },
+        record.response_mode == crate::MTU_PROBE_MODE_BASE64).ok()
 }
 
 fn resolve_compression_type(requested: u8, allowed_mask: u8) -> u8 {

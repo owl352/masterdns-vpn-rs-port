@@ -46,6 +46,9 @@ struct RecentlyClosedRecord {
 pub type ActiveStreams = Arc<[(u16, Arc<StreamServer>)]>;
 
 pub struct SessionRecord {
+    /// Relayed UDP replies, served ahead of streams and dropped when stale.
+    pub(crate) datagrams: Mutex<std::collections::VecDeque<(Instant, vpnproto::Packet)>>,
+    pub(crate) transport: Mutex<crate::transport::SessionTransport>,
     pub id: u8,
     pub cookie: u8,
     pub response_mode: u8,
@@ -54,6 +57,7 @@ pub struct SessionRecord {
     pub upload_mtu: u16,
     pub download_mtu: u16,
     pub download_mtu_bytes: usize,
+    pub download_txt_budget: usize,
     pub verify_code: [u8; 4],
     signature: [u8; SESSION_INIT_DATA_SIZE],
     pub max_packed_blocks: i64,
@@ -98,6 +102,8 @@ impl SessionRecord {
         orphan_queue_cap: usize,
     ) -> Self {
         SessionRecord {
+            datagrams: Mutex::new(std::collections::VecDeque::new()),
+            transport: Mutex::new(crate::transport::SessionTransport::default()),
             id,
             cookie: 0,
             response_mode,
@@ -106,6 +112,7 @@ impl SessionRecord {
             upload_mtu: 0,
             download_mtu: 0,
             download_mtu_bytes: 0,
+            download_txt_budget: 0,
             verify_code: [0; 4],
             signature,
             max_packed_blocks: 1,
@@ -159,6 +166,7 @@ impl SessionRecord {
             download_compression: self.download_compression,
             download_mtu: self.download_mtu,
             download_mtu_bytes: self.download_mtu_bytes,
+            download_txt_budget: self.download_txt_budget,
             max_packed_blocks: self.max_packed_blocks,
         }
     }
@@ -177,6 +185,7 @@ impl SessionRecord {
         self.upload_mtu = clamp_mtu_to_limit(upload_mtu, effective_upload_max);
         self.download_mtu = clamp_mtu_to_limit(download_mtu, effective_download_max);
         self.download_mtu_bytes = self.download_mtu as usize;
+        self.download_txt_budget = dnsparser::tested_data_txt_budget(self.download_mtu_bytes, self.response_mode == MTU_PROBE_MODE_BASE64);
         self.max_packed_blocks = vpnproto::calculate_max_packed_blocks(self.download_mtu_bytes as i64, 80, max_packets_per_batch);
     }
 
@@ -206,6 +215,20 @@ impl SessionRecord {
 
         self.recently_closed.lock().unwrap().remove(&stream_id);
 
+        let mut arq_config = arq_config;
+        if stream_id != 0 {
+            let mut t = self.transport.lock().unwrap();
+            t.expire(Instant::now());
+            if t.phase == crate::transport::Phase::Active {
+                if !t.used_ids.insert(stream_id) { return None; }
+                let c = t.selected.unwrap();
+                arq_config.transport_serial_span = c.serial_span;
+                arq_config.transport_feedback_budget = c.feedback_budget;
+            } else {
+                // A legacy stream start is an irrevocable decision, even after SELECT.
+                t.phase = crate::transport::Phase::Legacy;
+            }
+        }
         let stream = StreamServer::new(stream_id, self.id, arq_config, mtu.max(1), self.stream_queue_cap, logger);
         streams.insert(stream_id, stream.clone());
 
@@ -238,6 +261,7 @@ impl SessionRecord {
         if streams.contains_key(&stream_id) {
             return true;
         }
+        if self.transport.lock().unwrap().used_ids.contains(&stream_id) { return false; }
         let limit = if self.max_active_streams_per_session == 0 { 2000 } else { self.max_active_streams_per_session };
         let mut active = streams.len();
         if streams.contains_key(&0) {
@@ -258,6 +282,17 @@ impl SessionRecord {
             return Vec::new().into();
         }
         self.active_streams.read().unwrap().clone()
+    }
+
+    /// Next relayed UDP reply that is still fresh enough to be useful.
+    pub(crate) fn pop_datagram(&self, now: Instant) -> Option<vpnproto::Packet> {
+        let mut queue = self.datagrams.lock().unwrap();
+        while let Some((at, packet)) = queue.pop_front() {
+            if now.duration_since(at) <= crate::datagram::DATAGRAM_TTL {
+                return Some(packet);
+            }
+        }
+        None
     }
 
     pub fn rr_stream_id(&self) -> i32 {
@@ -436,6 +471,7 @@ pub struct SessionRuntimeView {
     pub download_compression: u8,
     pub download_mtu: u16,
     pub download_mtu_bytes: usize,
+    pub download_txt_budget: usize,
     pub max_packed_blocks: i64,
 }
 

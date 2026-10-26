@@ -150,6 +150,7 @@ impl Arq {
     /// the reply to the very query that carried the data, instead of waiting
     /// for the peer's next query. Returns `true` if the packet was accepted.
     pub fn receive_data(&self, sn: u16, data: &[u8]) -> bool {
+        if self.transport_enabled() { return false; }
         {
             let mut s = self.inner.lock().unwrap();
             if s.closed || s.rst_received || s.rst_sent {
@@ -427,6 +428,11 @@ impl Arq {
     /// Resolves inbound `STREAM_DATA_ACK` and frees send-window backpressure slots.
     /// Returns `true` only when this ARQ instance was actually tracking the data packet.
     pub fn receive_ack(&self, _packet_type: u8, sn: u16) -> bool {
+        if self.transport_enabled() { return false; }
+        self.receive_ack_generation(sn, None, true)
+    }
+
+    pub(crate) fn receive_ack_generation(&self, sn: u16, generation: Option<u32>, allow_sample: bool) -> bool {
         let now = Instant::now();
         let mut handled = false;
         let mut should_signal_window = false;
@@ -437,9 +443,16 @@ impl Arq {
         {
             let mut s = self.inner.lock().unwrap();
             s.last_activity = now;
+            if let Some(seq) = generation {
+                let Some(t) = s.transport.as_mut() else { return false };
+                if t.logical_for(sn) != Some(seq) { return false; }
+                let Some(entry) = t.ledger.get_mut(&seq) else { return false };
+                if !entry.dispatched || entry.acked { return false; }
+                entry.acked = true;
+            }
 
             if let Some(info) = s.snd_buf.get(&sn) {
-                if info.sample_eligible && info.dispatched {
+                if allow_sample && info.sample_eligible && info.dispatched {
                     if let Some(last_sent_at) = info.last_sent_at {
                         sample = now.duration_since(last_sent_at);
                         sample_eligible = true;
@@ -449,6 +462,9 @@ impl Arq {
                 let acked_created_at = info.created_at;
                 let acked_sent_at = if info.dispatched && info.sample_eligible { info.last_sent_at } else { None };
                 s.snd_buf.remove(&sn);
+                if sample_eligible && generation.is_some() {
+                    if let Some(t) = s.transport.as_mut() { t.rtt_samples = t.rtt_samples.wrapping_add(1); }
+                }
                 // Constant work per ACK. Evaluate bounded evidence in the
                 // scheduler rather than walking the entire send window here.
                 if let Some(sent_at) = acked_sent_at {
@@ -479,7 +495,8 @@ impl Arq {
             if sample_eligible {
                 self.note_successful_data_sample(sample);
             }
-            self.enqueuer.remove_queued_data(sn);
+            if let Some(seq) = generation { self.enqueuer.remove_queued_logical_data(seq); }
+            else { self.enqueuer.remove_queued_data(sn); }
 
             if self.close_read_received() {
                 self.try_finalize_remote_eof();
@@ -495,6 +512,7 @@ impl Arq {
     }
 
     pub fn handle_data_nack(&self, sn: u16) -> bool {
+        if self.transport_enabled() { return false; }
         self.queue_data_retry(sn, Instant::now(), None, false, true)
     }
 
@@ -649,6 +667,7 @@ impl Arq {
     }
 
     pub(crate) fn run_gap_recovery_watchdog(&self, now: Instant) {
+        if self.transport_enabled() { return; }
         if self.data_nack_max_gap == 0 || self.is_closed() {
             return;
         }

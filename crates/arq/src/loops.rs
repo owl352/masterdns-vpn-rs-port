@@ -118,7 +118,7 @@ async fn wait_window_not_full(arq: &Arc<Arq>) {
     loop {
         let (snd_buf_len, closed) = {
             let s = arq.inner.lock().unwrap();
-            (s.snd_buf.len(), s.closed)
+            (if s.transport.as_ref().is_some_and(|t| !t.has_send_room()) { arq.limit } else { s.snd_buf.len() }, s.closed)
         };
         if snd_buf_len < arq.limit || closed {
             return;
@@ -141,6 +141,10 @@ async fn wait_window_not_full(arq: &Arc<Arq>) {
 /// frees a slot, comes back MTU-sized. A few packets stay queued so that a
 /// burst of concurrent pulls (duplicated queries) all find data.
 pub(crate) const READ_AHEAD_DATA_PACKETS: usize = 4;
+/// Negotiated clients pull in DNS batches; keep two 32-query batches ready.
+/// Still bounded by the selected span and ARQ backpressure limit, with legacy
+/// pacing unchanged. At an 800-byte path this is under 50 KiB of queued data.
+pub(crate) const TRANSPORT_READ_AHEAD_DATA_PACKETS: usize = 64;
 
 /// Upper bound between rechecks while paced, and how long to wait without any
 /// dequeue signal before recounting `queued_data` from `snd_buf` in case it
@@ -158,14 +162,16 @@ async fn wait_for_pull_demand(arq: &Arc<Arq>) -> bool {
             if s.closed || s.stop_local_read {
                 return false;
             }
-            if s.queued_data < READ_AHEAD_DATA_PACKETS {
+            let read_ahead = s.transport.as_ref().map_or(READ_AHEAD_DATA_PACKETS, |t|
+                TRANSPORT_READ_AHEAD_DATA_PACKETS.min(t.span as usize).min(arq.limit).max(1));
+            if s.queued_data < read_ahead {
                 return true;
             }
             let since = *waiting_since.get_or_insert_with(std::time::Instant::now);
             if since.elapsed() >= PULL_DEMAND_RECOUNT_AFTER {
                 s.queued_data = s.snd_buf.values().filter(|info| !info.dispatched).count();
                 waiting_since = None;
-                if s.queued_data < READ_AHEAD_DATA_PACKETS {
+                if s.queued_data < read_ahead {
                     return true;
                 }
             }
@@ -214,6 +220,7 @@ async fn io_loop(arq: Arc<Arq>) {
         if arq.is_closed() {
             return;
         }
+        if arq.stop_on_logical_exhaustion() { return; }
         wait_window_not_full(&arq).await;
 
         let (stop_local_read, closed, io_ready) = {
@@ -271,16 +278,26 @@ async fn io_loop(arq: Arc<Arq>) {
                 transient_since = None;
                 let raw = buf[..n].to_vec();
                 let now = std::time::Instant::now();
-                let sn = {
+                let (sn, logical_seq) = {
                     let mut s = arq.inner.lock().unwrap();
+                    // A read already in flight when a negotiated EOF/abort
+                    // captured its endpoint must not append a later generation.
+                    if s.transport.is_some() && (s.closed || s.stop_local_read) { return; }
                     s.last_activity = now;
                     let sn = s.snd_nxt;
                     s.snd_nxt = s.snd_nxt.wrapping_add(1);
+                    if let Some(t) = s.transport.as_mut() {
+                        let logical = t.send_next;
+                        t.send_next += 1;
+                        t.ledger.insert(logical, crate::transport::Dispatch::default());
+                    }
                     let current_rto = arq.current_data_base_rto(&s);
                     s.queued_data += 1;
+                    let logical_seq = s.transport.as_ref().map(|t| t.send_next - 1);
                     s.snd_buf.insert(
                         sn,
                         crate::types::DataItem {
+                            logical_seq,
                             data: raw.clone(),
                             nack_pending: false,
                             retry_cause: None,
@@ -295,10 +312,12 @@ async fn io_loop(arq: Arc<Arq>) {
                             ttl: Duration::ZERO,
                         },
                     );
-                    sn
+                    (sn, logical_seq)
                 };
 
-                let ok = arq.enqueuer.push_tx_packet(
+                let ok = if let Some(seq) = logical_seq {
+                    arq.enqueuer.push_tx_logical_packet(enums::PACKET_PRIORITY_NORMAL, enums::PACKET_STREAM_DATA, seq, 0, 0, arq.compression_type, Duration::ZERO, &raw)
+                } else { arq.enqueuer.push_tx_packet(
                     enums::default_packet_priority(enums::PACKET_STREAM_DATA),
                     enums::PACKET_STREAM_DATA,
                     sn,
@@ -307,17 +326,22 @@ async fn io_loop(arq: Arc<Arq>) {
                     arq.compression_type,
                     Duration::ZERO,
                     &raw,
-                );
+                ) };
                 if !ok {
                     let mut s = arq.inner.lock().unwrap();
                     let s = &mut *s;
                     if let Some(info) = s.snd_buf.get_mut(&sn) {
+                        if logical_seq.is_some() && info.logical_seq != logical_seq { continue; }
                         if !info.dispatched {
                             s.queued_data = s.queued_data.saturating_sub(1);
                         }
                         info.dispatched = true;
                         info.last_sent_at = now.checked_sub(info.current_rto);
                     }
+                } else if let Some(seq) = logical_seq {
+                    // An abort may race the enqueue, but the captured unit must
+                    // never become legacy or remove another epoch's packet.
+                    if !arq.has_pending_logical_sequence(seq) { arq.enqueuer.remove_queued_logical_data(seq); }
                 }
             }
             Ok(Err(e)) => match classify_io_error(&e) {
@@ -403,6 +427,7 @@ async fn write_loop(arq: Arc<Arq>) {
                         Some(data) => {
                             to_write.push(data);
                             s.rcv_nxt = s.rcv_nxt.wrapping_add(1);
+                            if let Some(t) = s.transport.as_mut() { t.writer_next += 1; }
                         }
                         None => break,
                     }
@@ -413,7 +438,7 @@ async fn write_loop(arq: Arc<Arq>) {
             if to_write.is_empty() {
                 let (cr, rst_received, receive_drained) = {
                     let s = arq.inner.lock().unwrap();
-                    (s.close_read_received, s.rst_received, s.pending_inbound == 0 && s.rcv_buf.is_empty())
+                    (s.close_read_received, s.rst_received, s.pending_inbound == 0 && s.rcv_buf.is_empty() && Arq::eof_boundary_drained_locked(&s))
                 };
                 if cr && receive_drained {
                     arq.half_close_local_writer().await;
@@ -579,6 +604,7 @@ async fn retransmit_loop(arq: Arc<Arq>) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        let earliest_due = earliest_due.into_iter().chain(arq.next_feedback_due()).min();
         if let Some(due) = earliest_due {
             let remaining = due.saturating_duration_since(std::time::Instant::now()).max(Duration::from_millis(20));
             interval = interval.min(remaining);

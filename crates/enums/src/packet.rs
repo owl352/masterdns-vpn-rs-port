@@ -81,3 +81,11 @@ pub const STREAM_STATE_CLOSING: u8 = 5;
 pub const STREAM_STATE_TIME_WAIT: u8 = 6;
 pub const STREAM_STATE_RESET: u8 = 7;
 pub const STREAM_STATE_CLOSED: u8 = 8;
+
+// Negotiated transport extension v1 (never emitted to unselected peers).
+pub const PACKET_TRANSPORT_CAPS: u8 = 0x38;
+pub const PACKET_TRANSPORT_CAPS_ACK: u8 = 0x39;
+pub const PACKET_STREAM_FEEDBACK: u8 = 0x3A;
+pub const PACKET_STREAM_ENVELOPE: u8 = 0x3B;
+/// Unreliable UDP datagram on stream 0, only after the datagram feature is selected.
+pub const PACKET_UDP_DATAGRAM: u8 = 0x3C;

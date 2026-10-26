@@ -98,8 +98,10 @@ async fn serve_loop_single(server: Arc<Server>, socket: Arc<UdpSocket>, buffer_s
                 Err(_) => return,
             },
         };
-        if let Some(response) = server.handle_packet(&buf[..n]) {
-            let _ = socket.send_to(&response, addr).await;
+        if let Some((response, ticket)) = server.handle_packet_with_ticket(&buf[..n], std::time::Instant::now()) {
+            if socket.send_to(&response, addr).await.is_ok() {
+                if let Some(ticket) = ticket { ticket.sent(); }
+            }
         }
     }
 }
@@ -117,6 +119,7 @@ async fn serve_loop_batched(server: Arc<Server>, socket: Arc<UdpSocket>, buffer_
     let fd = socket.as_raw_fd();
     let mut batch = RecvBatch::new(buffer_size);
     let mut replies: Vec<(Vec<u8>, SocketAddr)> = Vec::with_capacity(BATCH);
+    let mut tickets: Vec<Option<crate::transport::ResponseTicket>> = Vec::with_capacity(BATCH);
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => return,
@@ -131,8 +134,9 @@ async fn serve_loop_batched(server: Arc<Server>, socket: Arc<UdpSocket>, buffer_
         let now = std::time::Instant::now();
         for i in 0..received {
             if let Some((packet, addr)) = batch.get(i) {
-                if let Some(response) = server.handle_packet_at(packet, now) {
+                if let Some((response, ticket)) = server.handle_packet_with_ticket(packet, now) {
                     replies.push((response, addr));
+                    tickets.push(ticket);
                 }
             }
         }
@@ -140,7 +144,12 @@ async fn serve_loop_batched(server: Arc<Server>, socket: Arc<UdpSocket>, buffer_
         let mut sent = 0;
         while sent < replies.len() {
             match socket.try_io(Interest::WRITABLE, || send_batch(fd, &replies[sent..])) {
-                Ok(n) => sent += n,
+                Ok(n) => {
+                    for ticket in &mut tickets[sent..sent+n] {
+                        if let Some(ticket) = ticket.take() { ticket.sent(); }
+                    }
+                    sent += n;
+                },
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     if socket.writable().await.is_err() {
                         break;
@@ -153,6 +162,7 @@ async fn serve_loop_batched(server: Arc<Server>, socket: Arc<UdpSocket>, buffer_
             }
         }
         replies.clear();
+        tickets.clear();
     }
 }
 

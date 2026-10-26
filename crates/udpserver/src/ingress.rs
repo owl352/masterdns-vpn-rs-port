@@ -63,8 +63,21 @@ impl Server {
 
     fn handle_tunnel_candidate(&self, packet: &[u8], parsed: &LitePacket, decision: &domainmatcher::Decision, now: std::time::Instant) -> Option<Vec<u8>> {
         let vpn_packet = LABEL_PARSE_SCRATCH
-            .with(|scratch| vpnproto::parse_inflated_from_labels_into(&decision.labels, Some(&self.codec), &mut scratch.borrow_mut()))
+            .with(|scratch| vpnproto::parse_from_labels_into(&decision.labels, Some(&self.codec), &mut scratch.borrow_mut()))
             .ok()?;
+
+        // Envelope bytes are not an outer compressed application payload.
+        // Standalone feedback also uses its negotiated bound before inflation.
+        let vpn_packet = if vpn_packet.packet_type == enums::PACKET_STREAM_ENVELOPE {
+            if vpn_packet.compression_type != compression::TYPE_OFF { return None; }
+            vpn_packet
+        } else if vpn_packet.packet_type == enums::PACKET_STREAM_FEEDBACK {
+            let record = self.sessions.get(vpn_packet.session_id)?;
+            let caps = record.transport_caps()?;
+            let mut packet = vpn_packet;
+            packet.payload = compression::try_decompress_payload_bounded(&packet.payload,packet.compression_type,caps.feedback_budget as usize)?;
+            packet
+        } else { vpnproto::inflate_payload(vpn_packet).ok()? };
 
         if vpn_packet.packet_type == enums::PACKET_SESSION_CLOSE {
             self.handle_session_close_notice(&vpn_packet, now);
@@ -82,7 +95,8 @@ impl Server {
                 return self.build_no_data_response_lite_logged(packet, parsed);
             }
 
-            return self.serve_queued_or_pong(packet, &decision.request_name, &record, now);
+            let feedback_stream = (vpn_packet.packet_type == enums::PACKET_STREAM_ENVELOPE).then_some(vpn_packet.stream_id);
+            return self.serve_queued_or_pong(packet, &decision.request_name, &record, now, feedback_stream);
         }
 
         match vpn_packet.packet_type {

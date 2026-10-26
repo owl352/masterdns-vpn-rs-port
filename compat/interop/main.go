@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,10 +38,15 @@ import (
 const tunnelDomain = "t.compat.test"
 
 type Impair struct {
-	Drop, Dup, Reorder      float64
-	ReorderDelay            time.Duration
-	RTT, Jitter             time.Duration
-	BurstEvery, BurstLength time.Duration
+	Drop, Dup, Reorder             float64
+	QueryDrop, ReplyDrop           float64
+	ReorderDelay                   time.Duration
+	RTT, Jitter                    time.Duration
+	BurstEvery, BurstLength        time.Duration
+	HoldReplyEvery                 int
+	HoldReplyFor                   time.Duration
+	RcodeEvery                     int
+	RcodeBurstEvery, RcodeBurstFor time.Duration
 }
 
 type Scenario struct {
@@ -76,6 +82,20 @@ type Result struct {
 	FirstDeliveryMs      float64          `json:"first_delivery_ms,omitempty"`
 	LongestDeliveryGapMs float64          `json:"longest_delivery_gap_ms,omitempty"`
 	DownloadSamplesMbps  []float64        `json:"download_samples_mbps,omitempty"`
+	ResolverLanes        []LaneResult     `json:"resolver_lanes,omitempty"`
+	TransportActivated   int              `json:"transport_activated,omitempty"`
+	TransportEnvelopes   int              `json:"transport_envelope_peers,omitempty"`
+}
+
+type LaneResult struct {
+	RTTMs       float64 `json:"rtt_ms"`
+	Queries     int64   `json:"queries"`
+	Replies     int64   `json:"replies"`
+	QueryBytes  int64   `json:"query_bytes"`
+	ReplyBytes  int64   `json:"reply_bytes"`
+	QueryDrops  int64   `json:"query_drops"`
+	ReplyDrops  int64   `json:"reply_drops"`
+	DNSFailures int64   `json:"dns_failures"`
 }
 
 var (
@@ -86,6 +106,8 @@ var (
 	testWindow      = flag.Int("window", 4096, "test server/client ARQ window")
 	testMTU         = flag.Int("download-mtu", 4000, "test client maximum download MTU")
 	testRTO         = flag.Float64("rto", 0.25, "test server/client initial RTO")
+	testNackInitial = flag.Float64("nack-initial", 0.1, "test client initial repair grace in seconds")
+	testNackRepeat  = flag.Float64("nack-repeat", 1, "test client repair repeat in seconds")
 	testCompression = flag.Int("compression", 0, "test upload/download compression type")
 	slowRTT         = flag.Duration("slow-rtt", 0, "RTT for slow DNS-id reply groups")
 	slowShare       = flag.Float64("slow-share", 0.2, "share of DNS ids assigned to slow groups")
@@ -106,6 +128,16 @@ var (
 	burstEvery      = flag.Duration("burst-every", 0, "period between simulated loss bursts")
 	burstLength     = flag.Duration("burst-length", 0, "duration of simulated loss bursts")
 	allowSkip       = flag.Bool("allow-skip", false, "do not count scenarios skipped for lack of a SOCKS host as failures")
+	resolverRTTs    = flag.String("resolver-rtts", "", "independent resolver lane RTTs, comma-separated durations")
+	queryLoss       = flag.Float64("query-loss", 0, "additional independent query loss probability")
+	replyLoss       = flag.Float64("reply-loss", 0, "additional independent reply loss probability")
+	holdReplyEvery  = flag.Int("hold-reply-every", 0, "delay every Nth reply in each resolver lane (0 disables)")
+	holdReplyFor    = flag.Duration("hold-reply-for", 0, "additional delay for deterministic held replies")
+	proxySeed       = flag.Int64("proxy-seed", 7, "impairment random seed (fixed per resolver lane)")
+	expectTransport = flag.String("expect-transport", "auto", "require auto, legacy or extended transport evidence")
+	rcodeEvery      = flag.Int("rcode-every", 0, "replace every Nth traffic reply with REFUSED (0 disables)")
+	rcodeBurstEvery = flag.Duration("rcode-burst-every", 0, "period between traffic-only REFUSED bursts")
+	rcodeBurstFor   = flag.Duration("rcode-burst-for", 0, "duration of traffic-only REFUSED bursts")
 )
 
 func allScenarios() []Scenario {
@@ -124,6 +156,8 @@ func allScenarios() []Scenario {
 		{Name: "stress-duplex", Mode: "SOCKS5", Work: "echo", Method: 2, Clients: 1, Streams: 8, Bytes: mib(8)},
 		{Name: "stress-upload-eof", Mode: "TCP", Work: "upload", Method: 1, Clients: 1, Streams: 1, Bytes: mib(40)},
 		{Name: "stress-download", Mode: "TCP", Work: "download", Method: 1, Clients: 1, Streams: 1, Bytes: mib(256)},
+		// Needs the datagram feature (new client and Rust server); run explicitly.
+		{Name: "udp-echo", Mode: "SOCKS5", Work: "udp", Method: 1, Clients: 1, Streams: 1, Bytes: 400},
 	}
 }
 
@@ -132,7 +166,7 @@ func pick(all []Scenario, sel string) ([]Scenario, error) {
 	case "all":
 		var routine []Scenario
 		for _, sc := range all {
-			if !strings.HasPrefix(sc.Name, "stress-") {
+			if !strings.HasPrefix(sc.Name, "stress-") && !strings.HasPrefix(sc.Name, "udp-") {
 				routine = append(routine, sc)
 			}
 		}
@@ -168,6 +202,10 @@ func main() {
 	}
 	if *clientDup < 1 || *setupDup < 1 || *batchLimit < 0 || *testWindow < 300 || *testMTU < 100 || *testRTO <= 0 || *testRTO > *testMaxRTO || *testCompression < 0 || *testCompression > 3 || *slowRTT < 0 || *slowShare < 0 || *slowShare > 1 || *repeat < 1 || *sustained < 0 || *pathRTT < 0 || *pathJitter < 0 || *pathLoss < 0 || *pathLoss > 1 || *burstLength < 0 || *burstEvery < 0 || (*burstLength > 0 && (*burstEvery == 0 || *burstLength >= *burstEvery)) {
 		fmt.Fprintln(os.Stderr, "invalid repeat, duration, loss or burst settings")
+		os.Exit(2)
+	}
+	if _, err := parseResolverRTTs(*resolverRTTs); err != nil || *queryLoss < 0 || *queryLoss > 1 || *replyLoss < 0 || *replyLoss > 1 || *holdReplyEvery < 0 || *holdReplyFor < 0 || *rcodeEvery < 0 || *rcodeBurstEvery < 0 || *rcodeBurstFor < 0 || (*rcodeBurstFor > 0 && (*rcodeBurstEvery == 0 || *rcodeBurstFor >= *rcodeBurstEvery)) || *testNackInitial < 0 || *testNackRepeat < 0.1 || (*expectTransport != "auto" && *expectTransport != "legacy" && *expectTransport != "extended") {
+		fmt.Fprintln(os.Stderr, "invalid resolver lanes, directional loss, held replies or transport expectation")
 		os.Exit(2)
 	}
 	selected, err := pick(allScenarios(), *scenarios)
@@ -321,19 +359,27 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	}
 
 	resolverPort := serverPort
-	var proxy *udpProxy
-	if sc.Impair != nil || *pathRTT > 0 || *pathJitter > 0 || *pathLoss > 0 || *burstEvery > 0 || *slowRTT > 0 {
+	var proxies []*udpProxy
+	laneRTTs, _ := parseResolverRTTs(*resolverRTTs)
+	if len(laneRTTs) == 0 && (sc.Impair != nil || *pathRTT > 0 || *pathJitter > 0 || *pathLoss > 0 || *burstEvery > 0 || *slowRTT > 0 || *queryLoss > 0 || *replyLoss > 0 || *holdReplyEvery > 0 || *rcodeEvery > 0 || *rcodeBurstEvery > 0) {
+		laneRTTs = []time.Duration{0}
+	}
+	for lane, rtt := range laneRTTs {
 		impairment := Impair{}
 		if sc.Impair != nil {
 			impairment = *sc.Impair
 		}
-		proxy, err = newUDPProxy(serverPort, impairment)
-		if err != nil {
-			res.Error = "proxy: " + err.Error()
+		impairment.RTT += rtt
+		proxy, proxyErr := newUDPProxyLane(serverPort, impairment, lane)
+		if proxyErr != nil {
+			res.Error = "proxy: " + proxyErr.Error()
 			return
 		}
+		proxies = append(proxies, proxy)
 		defer proxy.close()
-		resolverPort = proxy.port
+		if lane == 0 {
+			resolverPort = proxy.port
+		}
 	}
 
 	var clients []*proc
@@ -343,6 +389,16 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 		_ = os.MkdirAll(cDir, 0o755)
 		port := freeTCPPort()
 		writeClientConfig(cDir, sc, key, port, resolverPort)
+		if len(proxies) > 1 {
+			var resolvers strings.Builder
+			for _, proxy := range proxies {
+				fmt.Fprintln(&resolvers, proxy.conn.LocalAddr().String())
+			}
+			if err := os.WriteFile(filepath.Join(cDir, "client_resolvers.txt"), []byte(resolvers.String()), 0o644); err != nil {
+				res.Error = "resolver lanes: " + err.Error()
+				return
+			}
+		}
 		c, err := startProc(*clientBin, cDir, filepath.Join(dir, fmt.Sprintf("client-%d.log", i)))
 		if err != nil {
 			res.Error = "start client: " + err.Error()
@@ -360,10 +416,13 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	}
 
 	cpuBefore, _ := procCPUSeconds(server.cmd.Process.Pid)
-	var queriesBefore, queryCopiesBefore, replyCopiesBefore int64
-	if proxy != nil {
-		queriesBefore = proxy.upstream.Load()
-		queryCopiesBefore, replyCopiesBefore = proxy.queryCopies.Load(), proxy.replyCopies.Load()
+	before := make([]LaneResult, len(proxies))
+	var queryCopiesBefore, replyCopiesBefore int64
+	for i, proxy := range proxies {
+		before[i] = proxy.snapshot()
+		proxy.faultStarted.Store(time.Now().UnixNano())
+		queryCopiesBefore += proxy.queryCopies.Load()
+		replyCopiesBefore += proxy.replyCopies.Load()
 	}
 
 	start := time.Now()
@@ -371,9 +430,22 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 	moved, err := runWork(sc, targets, listenPorts, host, targetPort, meter)
 	meter.finish(&res)
 	res.Seconds = time.Since(start).Seconds()
-	if proxy != nil {
-		res.InjectedQueryCopies = proxy.queryCopies.Load() - queryCopiesBefore
-		res.InjectedReplyCopies = proxy.replyCopies.Load() - replyCopiesBefore
+	for i, proxy := range proxies {
+		res.InjectedQueryCopies += proxy.queryCopies.Load()
+		res.InjectedReplyCopies += proxy.replyCopies.Load()
+		lane := laneDelta(before[i], proxy.snapshot())
+		res.Queries += lane.Queries
+		res.ResolverLanes = append(res.ResolverLanes, lane)
+	}
+	res.InjectedQueryCopies -= queryCopiesBefore
+	res.InjectedReplyCopies -= replyCopiesBefore
+	if err == nil && len(res.ResolverLanes) > 1 {
+		for i, lane := range res.ResolverLanes {
+			if lane.Queries == 0 || lane.Replies == 0 {
+				err = fmt.Errorf("resolver lane %d was not exercised during application traffic", i)
+				break
+			}
+		}
 	}
 	if err != nil {
 		res.Error = err.Error()
@@ -385,12 +457,22 @@ func runScenario(sc Scenario, host, bindIP string) (res Result) {
 		cpuAfter, _ := procCPUSeconds(server.cmd.Process.Pid)
 		res.ServerCPU = cpuAfter - cpuBefore
 		res.ServerRSSKB, _ = procRSSKB(server.cmd.Process.Pid)
-		if proxy != nil {
-			res.Queries = proxy.upstream.Load() - queriesBefore
-			if res.Queries > 0 {
-				res.CPUPerQueryUs = res.ServerCPU * 1e6 / float64(res.Queries)
-			}
+		if res.Queries > 0 {
+			res.CPUPerQueryUs = res.ServerCPU * 1e6 / float64(res.Queries)
 		}
+	}
+	logs := []string{server.log.String()}
+	for _, client := range clients {
+		logs = append(logs, client.log.String())
+	}
+	res.TransportActivated, res.TransportEnvelopes, err = transportEvidence(logs, *expectTransport)
+	// UDP-only work moves no stream data, so no envelopes are expected.
+	if sc.Work == "udp" && res.TransportActivated == len(logs) {
+		err = nil
+	}
+	if err != nil {
+		res.Error = err.Error()
+		return
 	}
 	res.Pass = true
 	return
@@ -451,6 +533,9 @@ func runWork(sc Scenario, t *targets, listenPorts []int, host string, targetPort
 			return 0, fmt.Errorf("download corrupted: got %d of %d bytes", n, sc.Bytes)
 		}
 		return n, nil
+
+	case "udp":
+		return socksUDPEcho(listenPorts[0], sc.Bytes, deadline)
 
 	case "echo":
 		var wg sync.WaitGroup
@@ -515,6 +600,96 @@ func socksEcho(port int, host string, targetPort, seed, size int, deadline time.
 	}
 	progress.complete = true
 	return 2 * n, nil
+}
+
+// socksUDPEcho sends count voice-sized datagrams through a SOCKS UDP
+// association to a local echo server and requires 90% to come back.
+func socksUDPEcho(port, count int, deadline time.Time) (int64, error) {
+	echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return 0, err
+	}
+	defer echo.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := echo.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			_, _ = echo.WriteToUDP(buf[:n], from)
+		}
+	}()
+	ctrl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 10*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer ctrl.Close()
+	_ = ctrl.SetDeadline(deadline)
+	var reply [10]byte
+	if _, err := ctrl.Write([]byte{5, 1, 0}); err != nil {
+		return 0, err
+	}
+	if _, err := io.ReadFull(ctrl, reply[:2]); err != nil {
+		return 0, err
+	}
+	if _, err := ctrl.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		return 0, err
+	}
+	if _, err := io.ReadFull(ctrl, reply[:]); err != nil || reply[1] != 0 || reply[3] != 1 {
+		return 0, fmt.Errorf("UDP associate failed: %v %v", reply, err)
+	}
+	relay := &net.UDPAddr{IP: net.IP(reply[4:8]), Port: int(binary.BigEndian.Uint16(reply[8:10]))}
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	target := echo.LocalAddr().(*net.UDPAddr)
+	header := []byte{0, 0, 0, 1, 127, 0, 0, 1, byte(target.Port >> 8), byte(target.Port)}
+	sent := make([]time.Time, count)
+	var rtts []time.Duration
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 2048)
+		seen := make(map[uint32]bool)
+		_ = conn.SetReadDeadline(time.Now().Add(time.Duration(count)*20*time.Millisecond + 3*time.Second))
+		for len(seen) < count {
+			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			if n < len(header)+160 || !bytes.Equal(buf[:len(header)], header) {
+				continue
+			}
+			i := binary.BigEndian.Uint32(buf[len(header):])
+			if int(i) < count && !seen[i] {
+				seen[i] = true
+				rtts = append(rtts, time.Since(sent[i]))
+			}
+		}
+	}()
+	payload := make([]byte, 160) // one 20-ms Opus frame with RTP/SRTP overhead
+	for i := 0; i < count; i++ {
+		binary.BigEndian.PutUint32(payload, uint32(i))
+		sent[i] = time.Now()
+		if _, err := conn.WriteToUDP(append(append([]byte(nil), header...), payload...), relay); err != nil {
+			return 0, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	<-done
+	slices.Sort(rtts)
+	median := time.Duration(0)
+	if len(rtts) > 0 {
+		median = rtts[len(rtts)/2]
+	}
+	fmt.Printf("udp-echo: %d/%d datagrams returned, median RTT %.1f ms\n", len(rtts), count, float64(median)/float64(time.Millisecond))
+	if len(rtts)*10 < count*9 {
+		return int64(len(rtts) * 160), fmt.Errorf("only %d of %d datagrams returned", len(rtts), count)
+	}
+	return int64(2 * len(rtts) * 160), nil
 }
 
 func socksConnect(conn net.Conn, host string, port int) error {
@@ -644,33 +819,50 @@ func (t *targets) close() {
 // ---- UDP impairment proxy ----
 
 type udpProxy struct {
-	port        int
-	conn        *net.UDPConn
-	server      *net.UDPAddr
-	impair      Impair
-	mu          sync.Mutex
-	peers       map[string]*net.UDPConn
-	upstream    atomic.Int64 // client->server datagrams forwarded (= queries)
-	queryCopies atomic.Int64
-	replyCopies atomic.Int64
-	closed      atomic.Bool
-	rng         *rand.Rand
-	rngMu       sync.Mutex
-	started     time.Time
+	port         int
+	conn         *net.UDPConn
+	server       *net.UDPAddr
+	impair       Impair
+	mu           sync.Mutex
+	peers        map[string]*net.UDPConn
+	upstream     atomic.Int64 // queries received before impairment
+	replies      atomic.Int64
+	queryBytes   atomic.Int64
+	replyBytes   atomic.Int64
+	queryDrops   atomic.Int64
+	replyDrops   atomic.Int64
+	queryCopies  atomic.Int64
+	replyCopies  atomic.Int64
+	faultStarted atomic.Int64
+	faultReplies atomic.Int64
+	dnsFailures  atomic.Int64
+	closed       atomic.Bool
+	rng          *rand.Rand
+	rngMu        sync.Mutex
+	started      time.Time
 }
 
 func newUDPProxy(serverPort int, impair Impair) (*udpProxy, error) {
+	return newUDPProxyLane(serverPort, impair, 0)
+}
+
+func newUDPProxyLane(serverPort int, impair Impair, lane int) (*udpProxy, error) {
 	impair.RTT += *pathRTT
 	impair.Jitter += *pathJitter
 	impair.Drop = max(impair.Drop, *pathLoss)
+	impair.QueryDrop = max(impair.QueryDrop, *queryLoss)
+	impair.ReplyDrop = max(impair.ReplyDrop, *replyLoss)
 	impair.BurstEvery, impair.BurstLength = *burstEvery, *burstLength
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	impair.HoldReplyEvery, impair.HoldReplyFor = *holdReplyEvery, *holdReplyFor
+	impair.RcodeEvery, impair.RcodeBurstEvery, impair.RcodeBurstFor = *rcodeEvery, *rcodeBurstEvery, *rcodeBurstFor
+	address := net.IPv4(127, 0, 0, byte(lane+1))
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: address})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolver lane %d at %s is unavailable: %w", lane, address, err)
 	}
 	_ = conn.SetReadBuffer(8 << 20)
 	_ = conn.SetWriteBuffer(8 << 20)
-	p := &udpProxy{started: time.Now(), port: conn.LocalAddr().(*net.UDPAddr).Port, conn: conn, server: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: serverPort}, impair: impair, peers: map[string]*net.UDPConn{}, rng: rand.New(rand.NewSource(7))}
+	p := &udpProxy{started: time.Now(), port: conn.LocalAddr().(*net.UDPAddr).Port, conn: conn, server: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: serverPort}, impair: impair, peers: map[string]*net.UDPConn{}, rng: rand.New(rand.NewSource(*proxySeed + int64(lane)*7919))}
 	go p.clientLoop()
 	return p, nil
 }
@@ -690,10 +882,25 @@ func (p *udpProxy) deliverDirection(send func([]byte), pkt []byte, reply bool) {
 	if p.closed.Load() {
 		return
 	}
-	if p.impair.BurstEvery > 0 && time.Since(p.started)%p.impair.BurstEvery < p.impair.BurstLength {
-		return
+	directionalDrop := p.impair.QueryDrop
+	var ordinal int64
+	if reply {
+		ordinal = p.replies.Add(1)
+		p.replyBytes.Add(int64(len(pkt)))
+		directionalDrop = p.impair.ReplyDrop
+		pkt = p.injectDNSFailure(pkt, time.Now())
+	} else {
+		p.upstream.Add(1)
+		p.queryBytes.Add(int64(len(pkt)))
 	}
-	if p.impair.Drop > 0 && p.roll() < p.impair.Drop {
+	burst := p.impair.BurstEvery > 0 && time.Since(p.started)%p.impair.BurstEvery < p.impair.BurstLength
+	drop := 1 - (1-p.impair.Drop)*(1-directionalDrop)
+	if burst || (drop > 0 && p.roll() < drop) {
+		if reply {
+			p.replyDrops.Add(1)
+		} else {
+			p.queryDrops.Add(1)
+		}
 		return
 	}
 	copies := 1
@@ -711,6 +918,9 @@ func (p *udpProxy) deliverDirection(send func([]byte), pkt []byte, reply bool) {
 			rtt = *slowRTT
 		}
 		delay := rtt/2 + time.Duration(p.roll()*float64(p.impair.Jitter))
+		if reply && p.impair.HoldReplyEvery > 0 && ordinal%int64(p.impair.HoldReplyEvery) == 0 {
+			delay += p.impair.HoldReplyFor
+		}
 		if p.impair.Reorder > 0 && p.roll() < p.impair.Reorder {
 			delay += p.impair.ReorderDelay
 		}
@@ -727,6 +937,24 @@ func (p *udpProxy) deliverDirection(send func([]byte), pkt []byte, reply bool) {
 	}
 }
 
+func (p *udpProxy) injectDNSFailure(pkt []byte, now time.Time) []byte {
+	started := p.faultStarted.Load()
+	if started == 0 || len(pkt) < 12 {
+		return pkt
+	}
+	ordinal := p.faultReplies.Add(1)
+	burst := p.impair.RcodeBurstEvery > 0 && now.Sub(time.Unix(0, started))%p.impair.RcodeBurstEvery < p.impair.RcodeBurstFor
+	if !burst && (p.impair.RcodeEvery == 0 || ordinal%int64(p.impair.RcodeEvery) != 0) {
+		return pkt
+	}
+	reply := make([]byte, 12)
+	copy(reply[:4], pkt[:4])
+	reply[2] = (reply[2] | 0x80) &^ 0x02
+	reply[3] = (reply[3] & 0xf0) | 5
+	p.dnsFailures.Add(1)
+	return reply
+}
+
 func (p *udpProxy) clientLoop() {
 	buf := make([]byte, 65535)
 	for {
@@ -738,7 +966,6 @@ func (p *udpProxy) clientLoop() {
 		if up == nil {
 			continue
 		}
-		p.upstream.Add(1)
 		p.deliver(func(b []byte) { _, _ = up.Write(b) }, buf[:n])
 	}
 }
@@ -924,6 +1151,7 @@ SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]
 SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]
 SOCKET_BUFFER_SIZE = 8388608
 MAX_PACKET_SIZE = 65535
+UDP_RELAY_ALLOW_PRIVATE = true
 `, sc.Mode, udpPort, tunnelDomain, sc.Method, forwardPort, *logLevel)
 	cfg = strings.ReplaceAll(cfg, "ARQ_WINDOW_SIZE = 4096", fmt.Sprintf("ARQ_WINDOW_SIZE = %d", *testWindow))
 	cfg = strings.ReplaceAll(cfg, "ARQ_MAX_RTO_SECONDS = 1.0", fmt.Sprintf("ARQ_MAX_RTO_SECONDS = %.3f", *testMaxRTO))
@@ -936,7 +1164,7 @@ MAX_PACKET_SIZE = 65535
 
 func writeClientConfig(dir string, sc Scenario, key string, listenPort, resolverPort int) {
 	mtuRetries := 0
-	if sc.Impair != nil && sc.Impair.Drop > 0 {
+	if (sc.Impair != nil && sc.Impair.Drop > 0) || *pathLoss > 0 || *queryLoss > 0 || *replyLoss > 0 {
 		mtuRetries = 4
 	}
 	cfg := fmt.Sprintf(`PROTOCOL_TYPE = %q
@@ -980,6 +1208,7 @@ LOG_LEVEL = %q
 	cfg = strings.ReplaceAll(cfg, "MAX_DOWNLOAD_MTU = 4000", fmt.Sprintf("MAX_DOWNLOAD_MTU = %d", *testMTU))
 	cfg = strings.ReplaceAll(cfg, "UPLOAD_COMPRESSION_TYPE = 0", fmt.Sprintf("UPLOAD_COMPRESSION_TYPE = %d", *testCompression))
 	cfg = strings.ReplaceAll(cfg, "DOWNLOAD_COMPRESSION_TYPE = 0", fmt.Sprintf("DOWNLOAD_COMPRESSION_TYPE = %d", *testCompression))
+	cfg += fmt.Sprintf("ARQ_DATA_NACK_INITIAL_DELAY_SECONDS = %.3f\nARQ_DATA_NACK_REPEAT_SECONDS = %.3f\n", *testNackInitial, *testNackRepeat)
 	if *batchLimit > 0 {
 		cfg += fmt.Sprintf("MAX_PACKETS_PER_BATCH = %d\n", *batchLimit)
 	}

@@ -1,6 +1,8 @@
 //! Port of `internal/compression/types.go`.
 
+use std::cell::RefCell;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const TYPE_OFF: u8 = 0;
 pub const TYPE_ZSTD: u8 = 1;
@@ -120,6 +122,36 @@ pub fn try_decompress_payload(data: &[u8], comp_type: u8) -> Option<Vec<u8>> {
     }
 }
 
+
+/// Decode an extension payload without allocating more output than its tested
+/// directional capacity. Legacy decoding keeps its existing safety limit.
+pub fn try_decompress_payload_bounded(data: &[u8], comp_type: u8, maximum: usize) -> Option<Vec<u8>> {
+    let maximum = maximum.min(MAX_DECOMPRESSED_SIZE);
+    fn read_limited(reader: impl Read, maximum: usize) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(maximum.min(4096));
+        reader.take((maximum + 1) as u64).read_to_end(&mut out).ok()?;
+        (out.len() <= maximum).then_some(out)
+    }
+    match comp_type {
+        TYPE_OFF => (data.len() <= maximum).then(|| data.to_vec()),
+        TYPE_ZLIB => read_limited(flate2::read::DeflateDecoder::new(data), maximum),
+        TYPE_ZSTD => {
+            let mut decoder = zstd::stream::Decoder::new(data).ok()?;
+            // Small transport units never need an attacker-controlled large window.
+            decoder.window_log_max(20).ok()?;
+            read_limited(decoder, maximum)
+        }
+        TYPE_LZ4 => {
+            if data.len() < 4 { return None; }
+            let expected = u32::from_le_bytes(data[..4].try_into().ok()?) as usize;
+            if expected > maximum { return None; }
+            let out = lz4_flex::block::decompress(&data[4..], expected).ok()?;
+            (out.len() == expected).then_some(out)
+        }
+        _ => None,
+    }
+}
+
 fn compress_zlib(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
     let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::new(1));
     encoder.write_all(data)?;
@@ -137,8 +169,44 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
     Ok(out)
 }
 
+thread_local! {
+    // A fresh zstd context per packet costs more than compressing ~1 KB.
+    static ZSTD_COMPRESSOR: RefCell<Option<zstd::bulk::Compressor<'static>>> = const { RefCell::new(None) };
+}
+
 fn compress_zstd(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
-    Ok(zstd::stream::encode_all(data, 1)?)
+    ZSTD_COMPRESSOR.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.is_none() {
+            *cell = Some(zstd::bulk::Compressor::new(1)?);
+        }
+        Ok(cell.as_mut().unwrap().compress(data)?)
+    })
+}
+
+/// Payloads tried and skipped after one fails to shrink. Most tunnelled
+/// traffic is already encrypted, so retrying every packet only burns CPU.
+const INCOMPRESSIBLE_SKIP: u32 = 32;
+
+/// Per-stream hint that stops compression attempts on incompressible data
+/// and retries periodically in case the content changes.
+#[derive(Debug, Default)]
+pub struct AdaptiveSkip {
+    skip: AtomicU32,
+}
+
+impl AdaptiveSkip {
+    /// Whether the next payload is worth compressing.
+    pub fn should_try(&self) -> bool {
+        self.skip
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_err()
+    }
+
+    /// Records whether an attempted compression shrank the payload.
+    pub fn record(&self, helped: bool) {
+        self.skip.store(if helped { 0 } else { INCOMPRESSIBLE_SKIP }, Ordering::Relaxed);
+    }
 }
 
 fn decompress_zstd(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
@@ -232,5 +300,44 @@ mod tests {
         let huge = (MAX_DECOMPRESSED_SIZE as u32) + 1;
         fake[0..4].copy_from_slice(&huge.to_le_bytes());
         assert!(decompress_lz4(&fake).is_err());
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+    #[test]
+    fn directional_limit_prevents_compressed_expansion_for_all_codecs() {
+        for kind in [TYPE_ZSTD,TYPE_LZ4,TYPE_ZLIB] {
+            let original=vec![42;4096];let (compressed,ctype)=compress_payload(&original,kind,1);
+            assert_eq!(ctype,kind);
+            assert!(try_decompress_payload_bounded(&compressed,ctype,150).is_none());
+            assert_eq!(try_decompress_payload_bounded(&compressed,ctype,4096).unwrap(),original);
+        }
+        assert!(try_decompress_payload_bounded(&[0;151],TYPE_OFF,150).is_none());
+        assert!(try_decompress_payload_bounded(&[0xff;8],TYPE_LZ4,150).is_none());
+        assert!(try_decompress_payload_bounded(b"data",255,150).is_none());
+    }
+}
+
+#[cfg(test)]
+mod adaptive_tests {
+    use super::*;
+
+    #[test]
+    fn reused_zstd_context_round_trips_and_skip_retries_periodically() {
+        for _ in 0..3 {
+            let data = vec![b'z'; 900];
+            let (c, t) = compress_payload(&data, TYPE_ZSTD, 1);
+            assert_eq!(t, TYPE_ZSTD);
+            assert_eq!(try_decompress_payload(&c, t).unwrap(), data);
+        }
+        let skip = AdaptiveSkip::default();
+        assert!(skip.should_try());
+        skip.record(false);
+        let tries = (0..=INCOMPRESSIBLE_SKIP).filter(|_| skip.should_try()).count();
+        assert_eq!(tries, 1);
+        skip.record(true);
+        assert!(skip.should_try() && skip.should_try());
     }
 }

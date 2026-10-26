@@ -28,9 +28,10 @@ impl Arq {
                 s.close_write_sent, s.close_write_received, s.close_write_acked,
                 s.deferred_close, s.waiting_ack_for, s.pending_fast_acks.len(), s.pending_reacks.len(),
                 s.data_adaptive_rto.current_base.as_millis(), s.data_adaptive_rto.srtt.as_millis(), s.last_data_nack_sent.len());
-            format!("{} retry_requested={:?} retry_queued={:?} retry_dispatched={:?} retry_coalesced={:?} original_dispatched={} recovery_scans={}",
+            let transport = s.transport.as_ref().map(|t|t.diagnostic_fields(now)).unwrap_or_default();
+            format!("{} retry_requested={:?} retry_queued={:?} retry_dispatched={:?} retry_coalesced={:?} original_dispatched={} recovery_scans={}{}",
                 line, s.recovery.requested, s.recovery.queued, s.recovery.dispatched,
-                s.recovery.coalesced, s.recovery.original, s.recovery.scans)
+                s.recovery.coalesced, s.recovery.original, s.recovery.scans, transport)
         };
         self.logger.infof(&line);
     }

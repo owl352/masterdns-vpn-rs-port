@@ -95,14 +95,19 @@ impl Arq {
         let control_max_rto = Duration::from_secs_f64(cfg.control_max_rto.max(0.05));
         let control_rto = Duration::from_secs_f64(cfg.control_rto.max(0.05)).min(control_max_rto);
 
-        let state = ArqState::new(cfg.is_virtual, !cfg.start_paused, rto, control_rto);
+        let mut state = ArqState::new(cfg.is_virtual, !cfg.start_paused, rto, control_rto);
+
+        if cfg.transport_serial_span > 0 {
+            assert!(cfg.transport_serial_span <= 16_384 && cfg.transport_serial_span as usize <= receive_window_size && cfg.transport_feedback_budget >= 14);
+            state.transport = Some(crate::transport::TransportState::new(cfg.transport_serial_span, cfg.transport_feedback_budget));
+        }
 
         let arq = Arc::new(Arq {
             stream_id,
             session_id,
             enqueuer,
             logger,
-            mtu: mtu.max(1),
+            mtu: if cfg.transport_serial_span > 0 { mtu.saturating_sub(11 + 14).max(1) } else { mtu.max(1) },
             window_size,
             receive_window_size,
             limit,
@@ -217,11 +222,22 @@ impl Arq {
     }
 
     pub fn note_tx_packet_dequeued(&self, packet_type: u8, sequence_num: u16, fragment_id: u8) {
+        self.note_tx_generation_dequeued(packet_type, sequence_num, fragment_id, None);
+    }
+    pub(crate) fn note_tx_generation_dequeued(&self, packet_type: u8, sequence_num: u16, fragment_id: u8, generation: Option<u32>) {
         let now = Instant::now();
         let mut s = self.inner.lock().unwrap();
 
+        if let Some(seq) = generation {
+            if s.transport.as_ref().and_then(|t| t.logical_for(sequence_num)) != Some(seq) { return; }
+        }
         match packet_type {
             enums::PACKET_STREAM_DATA | enums::PACKET_STREAM_RESEND => {
+                if let Some(t) = s.transport.as_mut() {
+                    if let Some(seq) = t.logical_for(sequence_num) {
+                        if let Some(entry) = t.ledger.get_mut(&seq) { entry.dispatched = true; entry.write_pending = false; }
+                    }
+                }
                 let mut was_queued = false;
                 let mut cause = None;
                 let mut original = false;
@@ -324,11 +340,13 @@ impl Arq {
             s.close_write_received = true;
             s.stop_local_read = true;
 
-            for sn in s.snd_buf.keys().copied().collect::<Vec<_>>() {
-                self.enqueuer.remove_queued_data(sn);
+            for (&sn, item) in &s.snd_buf {
+                if let Some(seq) = item.logical_seq { self.enqueuer.remove_queued_logical_data(seq); }
+                else { self.enqueuer.remove_queued_data(sn); }
             }
             s.snd_buf.clear();
             s.queued_data = 0;
+            if let Some(t) = s.transport.as_mut() { t.clear_tx_tracking(); }
         }
         self.signal_window_not_full();
 
@@ -471,6 +489,7 @@ impl Arq {
     }
 
     pub(crate) fn run_final_ack_watchdog(&self, now: Instant) {
+        if self.transport_enabled() { return; }
         let ack_sn;
         {
             let mut s = self.inner.lock().unwrap();
@@ -526,7 +545,8 @@ impl Arq {
         let should_close = {
             let s = self.inner.lock().unwrap();
             let waiting_for_close_read_ack = s.waiting_ack && s.waiting_ack_for == enums::PACKET_STREAM_CLOSE_READ;
-            let receive_drained = (s.rcv_buf.is_empty() && s.pending_inbound == 0) || s.local_writer_broken;
+            let receive_drained = ((s.rcv_buf.is_empty() && s.pending_inbound == 0) || s.local_writer_broken)
+                && Arq::eof_boundary_drained_locked(&s);
             let write_side_settled = (!s.local_writer_broken && (!s.close_write_sent || s.close_write_acked))
                 || (s.local_writer_broken && (s.close_write_acked || s.close_write_received));
             !s.closed
@@ -614,6 +634,7 @@ pub(crate) fn control_key(packet_type: u8, sequence_num: u16, fragment_id: u8) -
 }
 
 pub(crate) fn clear_all_queues(state: &mut ArqState, clear_control: bool, window_not_full: &Notify) {
+    if let Some(t) = state.transport.as_mut() { t.clear_tracking_after_close(); }
     state.ack_evidence.clear();
     state.next_retry_due = None;
     state.snd_buf = FxHashMap::default();
@@ -630,8 +651,9 @@ pub(crate) fn clear_all_queues(state: &mut ArqState, clear_control: bool, window
 }
 
 pub(crate) fn clear_outbound_state_locked(state: &mut ArqState, clear_control: bool, enqueuer: &dyn PacketEnqueuer, window_not_full: &Notify) {
-    for sn in state.snd_buf.keys().copied().collect::<Vec<_>>() {
-        enqueuer.remove_queued_data(sn);
+    for (&sn, item) in &state.snd_buf {
+        if let Some(seq) = item.logical_seq { enqueuer.remove_queued_logical_data(seq); }
+        else { enqueuer.remove_queued_data(sn); }
     }
     for sn in state.last_data_nack_sent.keys().copied().collect::<Vec<_>>() {
         enqueuer.remove_queued_data_nack(sn);
@@ -641,6 +663,7 @@ pub(crate) fn clear_outbound_state_locked(state: &mut ArqState, clear_control: b
     state.next_retry_due = None;
     state.snd_buf = FxHashMap::default();
     state.queued_data = 0;
+    if let Some(t) = state.transport.as_mut() { t.clear_tx_tracking(); }
     if clear_control {
         state.control_snd_buf = FxHashMap::default();
     }

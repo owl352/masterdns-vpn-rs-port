@@ -37,6 +37,38 @@ within 5 s of SIGTERM, which catches deadlocks.
 `-server-bin` also accepts the Go server, which is how the runner itself was
 validated and how the baselines below were taken.
 
+## Negotiated transport extension
+
+[Transport v1](transport-extension-v1.md) adds session-negotiated cumulative
+ACK/SACK, explicit epoch-aware repair ranges and data/control piggybacking.
+`fixtures/transport-v1.json` supplies shared cleartext codec vectors for Rust
+and the patched Go desktop client; the original Go wire fixtures remain intact.
+
+The runner accepts `-expect-transport extended` to require activation on every
+peer and at least one peer observing a real data envelope. `legacy` rejects
+activation/envelope evidence, and `auto` preserves the original test behavior.
+Integrity alone is not evidence that an extension was exercised.
+
+Additional local impairment flags:
+
+- `-query-loss` / `-reply-loss`: separate directional loss, combined with the
+  scenario's existing loss probability.
+- `-hold-reply-every N -hold-reply-for 250ms`: delay every Nth received reply,
+  including its duplicate copies. This creates controlled delivery holes but
+  does not inspect encrypted payloads or guarantee a particular data sequence.
+- `-proxy-seed`: explicit random seed; scheduling still prevents identical
+  replay traces.
+- `-resolver-rtts 20ms,120ms`: independent IPv4 resolver proxies at distinct
+  loopback addresses. The test fails if any lane is unavailable or unused
+  during application traffic. Linux normally supports the whole 127/8 range;
+  macOS may require privileged aliases, which this harness never creates.
+  Different ports on one IP are not a substitute: the client deduplicates them.
+
+Per-lane JSON counts received datagrams/bytes before impairment and dropped
+original datagrams; duplicate copies have separate counters. These are wire
+traffic diagnostics, not application goodput. Run old/new comparisons
+sequentially using retained binaries and separate work directories.
+
 ## Latest recovery-efficiency evaluation
 
 See [recovery efficiency results](recovery-efficiency-results.md) for bounded

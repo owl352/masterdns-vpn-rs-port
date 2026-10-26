@@ -42,6 +42,8 @@ fn build_packet_flags() -> [u8; 256] {
         PACKET_MTU_UP_RES,
         PACKET_MTU_DOWN_REQ,
         PACKET_SESSION_INIT,
+        PACKET_TRANSPORT_CAPS,
+        PACKET_TRANSPORT_CAPS_ACK,
         PACKET_SESSION_ACCEPT,
         PACKET_SESSION_BUSY,
         PACKET_SESSION_CLOSE,
@@ -54,6 +56,10 @@ fn build_packet_flags() -> [u8; 256] {
     for &pt in valid_only {
         flags[pt as usize] |= FLAG_VALID;
     }
+
+    flags[PACKET_STREAM_ENVELOPE as usize] = FLAG_VALID | FLAG_STREAM | FLAG_SEQUENCE | FLAG_FRAGMENT | FLAG_COMPRESSION;
+    flags[PACKET_STREAM_FEEDBACK as usize] = FLAG_VALID | FLAG_COMPRESSION;
+    flags[PACKET_UDP_DATAGRAM as usize] = FLAG_VALID | FLAG_STREAM | FLAG_SEQUENCE | FLAG_FRAGMENT;
 
     let stream_and_seq: &[u8] = &[
         PACKET_STREAM_SYN,

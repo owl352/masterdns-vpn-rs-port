@@ -17,6 +17,7 @@ impl Arq {
         self.emit_diagnostic_snapshot(now);
         self.run_gap_recovery_watchdog(now);
         self.run_final_ack_watchdog(now);
+        self.emit_logical_feedback(now);
         self.emit_due_reacks(now);
         self.emit_due_fast_acks(now);
 
@@ -134,13 +135,20 @@ impl Arq {
     /// and explicit NACK. Never overwrite a concurrent dequeue's timestamp.
     /// Queue failure rolls back only our still-queued reservation.
     pub(crate) fn queue_data_retry(&self, sn: u16, now: Instant, expected_sent: Option<Instant>, timed_out: bool, nack: bool) -> bool {
+        self.queue_data_retry_with(sn, now, expected_sent, timed_out, nack, false)
+    }
+
+    /// An explicit transport repair names a hole the receiver has already
+    /// waited out under its own grace and repeat timers, so only a resend
+    /// sent within the last round trip suppresses it.
+    pub(crate) fn queue_data_retry_with(&self, sn: u16, now: Instant, expected_sent: Option<Instant>, timed_out: bool, nack: bool, explicit: bool) -> bool {
         let previous = {
             let mut s = self.inner.lock().unwrap();
             if s.closed || s.rst_sent || s.rst_received {
                 return false;
             }
             let cause = if timed_out { crate::types::RetryCause::Timeout } else if nack { crate::types::RetryCause::Nack } else { crate::types::RetryCause::Early };
-            let grace = self.reorder_grace(&s, now);
+            let grace = if explicit { explicit_repair_gap(&s) } else { self.reorder_grace(&s, now) };
             if self.diagnostic_tick.is_some() { s.recovery.requested[cause as usize] += 1; }
             let floor = self.current_data_base_rto(&s);
             let ceiling = if s.deferred_close || matches!(s.state, StreamState::Draining) {
@@ -166,7 +174,7 @@ impl Arq {
             if nack
                 && item
                     .last_nack_sent_at
-                    .is_some_and(|at| now.saturating_duration_since(at) < self.data_nack_repeat_interval)
+                    .is_some_and(|at| now.saturating_duration_since(at) < if explicit { grace } else { self.data_nack_repeat_interval })
             {
                 return false;
             }
@@ -185,7 +193,9 @@ impl Arq {
             s.queued_data += 1;
             previous
         };
-        let ok = self.enqueuer.push_tx_packet(
+        let ok = if let Some(seq) = previous.logical_seq {
+            self.enqueuer.push_tx_logical_packet(enums::PACKET_PRIORITY_RETRY,enums::PACKET_STREAM_RESEND,seq,0,0,previous.compression_type,previous.ttl,&previous.data)
+        } else { self.enqueuer.push_tx_packet(
             enums::default_packet_priority(enums::PACKET_STREAM_RESEND),
             enums::PACKET_STREAM_RESEND,
             sn,
@@ -194,7 +204,7 @@ impl Arq {
             previous.compression_type,
             previous.ttl,
             &previous.data,
-        );
+        ) };
         if !ok {
             let mut s = self.inner.lock().unwrap();
             if let Some(item) = s.snd_buf.get_mut(&sn) {
@@ -214,7 +224,11 @@ impl Arq {
         }
         // An ACK may have arrived between reservation and enqueue. Remove
         // its stale queued retry; the response path also filters stale data.
-        if !self.has_pending_sequence(sn) {
+        if let Some(seq) = previous.logical_seq {
+            if self.logical_sequence(sn) != Some(seq) || !self.has_pending_sequence(sn) {
+                self.enqueuer.remove_queued_logical_data(seq);
+            }
+        } else if !self.has_pending_sequence(sn) {
             self.enqueuer.remove_queued_data(sn);
         }
         true
@@ -272,7 +286,8 @@ impl Arq {
             } else if s.rst_received && !s.closed {
                 Outcome::FinalizePeerResetDrain
             } else {
-                let receive_drained_for_close_write = s.rcv_buf.is_empty() && s.pending_inbound == 0 && !s.local_write_pending;
+                let receive_drained_for_close_write = s.rcv_buf.is_empty() && s.pending_inbound == 0 && !s.local_write_pending
+                    && Arq::eof_boundary_drained_locked(&s);
                 let peer_finished_sending = s.close_read_received || s.local_writer_broken;
                 let should_initiate_close_write_after_eof = self.is_client
                     && (s.client_eof_at.map(|t| now.duration_since(t) >= Duration::from_secs(2)).unwrap_or(false)
@@ -450,4 +465,10 @@ impl InstantExt for Instant {
     fn after(&self, other: Instant) -> bool {
         *self > other
     }
+}
+
+fn explicit_repair_gap(s: &crate::state::ArqState) -> Duration {
+    let rtt = &s.data_adaptive_rto;
+    let srtt = if rtt.initialized { rtt.srtt } else { Duration::ZERO };
+    srtt.max(Duration::from_millis(100))
 }

@@ -10,6 +10,7 @@ pub(crate) struct ArqState {
     pub io_ready: bool,
     pub stream_workers_started: bool,
 
+    pub transport: Option<crate::transport::TransportState>,
     pub snd_nxt: u16,
     pub rcv_nxt: u16,
     /// Highest data sequence seen from the peer that was classified as
@@ -105,6 +106,7 @@ impl ArqState {
         ArqState {
             io_ready,
             stream_workers_started: false,
+            transport: None,
             snd_nxt: 0,
             rcv_nxt: 0,
             rcv_highest: 0,

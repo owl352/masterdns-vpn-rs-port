@@ -32,3 +32,6 @@ pub enum VpnProtoError {
     #[error("invalid compressed vpn payload")]
     InvalidCompressedPayload,
 }
+
+mod transport;
+pub use transport::*;

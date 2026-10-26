@@ -7,7 +7,9 @@ use crate::packet::*;
 /// their own priority lane while enqueue policy decides coexistence.
 pub fn packet_identity_key(stream_id: u16, packet_type: u8, sequence_num: u16, fragment_id: u8) -> u64 {
     match packet_type {
-        PACKET_STREAM_DATA
+        PACKET_STREAM_ENVELOPE
+        | PACKET_UDP_DATAGRAM
+        | PACKET_STREAM_DATA
         | PACKET_STREAM_RESEND
         | PACKET_STREAM_DATA_ACK
         | PACKET_STREAM_DATA_NACK
@@ -75,4 +77,9 @@ fn packet_identity_seq(stream_id: u16, packet_type: u8, sequence_num: u16) -> u6
 
 fn packet_identity_seq_frag(stream_id: u16, packet_type: u8, sequence_num: u16, fragment_id: u8) -> u64 {
     (stream_id as u64) << 40 | (packet_type as u64) << 32 | (sequence_num as u64) << 8 | (fragment_id as u64)
+}
+
+/// Exact generation identity for negotiated queues (16 + 8 + 32 + 8 bits).
+pub fn packet_identity_logical(stream_id: u16, packet_type: u8, logical_sequence: u32, fragment_id: u8) -> u64 {
+    (stream_id as u64) << 48 | (packet_type as u64) << 40 | (logical_sequence as u64) << 8 | fragment_id as u64
 }

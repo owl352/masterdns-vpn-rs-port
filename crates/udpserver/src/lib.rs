@@ -13,6 +13,7 @@
 
 #[cfg(target_os = "linux")]
 mod batch_io;
+mod datagram;
 mod deferred;
 mod dns_tunnel;
 mod ingress;
@@ -23,6 +24,7 @@ mod session;
 mod session_handlers;
 mod socks5_upstream;
 mod stream;
+mod transport;
 
 #[cfg(test)]
 mod tests;
@@ -68,6 +70,9 @@ pub struct Server {
     dns_resolve_inflight: inflight::Manager<Vec<u8>>,
     dns_upstream_servers: Vec<String>,
     dns_fragments: fragmentstore::Store<DnsFragmentKey>,
+    datagram_fragments: fragmentstore::Store<datagram::DatagramFragmentKey>,
+    udp_flows: datagram::Flows,
+    datagram_seq: std::sync::atomic::AtomicU32,
     socks5_fragments: fragmentstore::Store<Socks5FragmentKey>,
     dns_fragment_timeout: Duration,
 
@@ -158,6 +163,9 @@ impl Server {
             dns_resolve_inflight: inflight::Manager::new(cfg.dns_inflight_wait_timeout(), Duration::from_secs(15)),
             dns_upstream_servers: cfg.dns_upstream_servers.clone(),
             dns_fragments: fragmentstore::Store::new(cfg.effective_dns_fragment_store_capacity() as usize),
+            datagram_fragments: fragmentstore::Store::new(4096),
+            udp_flows: datagram::Flows::default(),
+            datagram_seq: std::sync::atomic::AtomicU32::new(0),
             socks5_fragments: fragmentstore::Store::new(cfg.effective_socks5_fragment_store_capacity() as usize),
             dns_fragment_timeout,
             upload_compression_mask,

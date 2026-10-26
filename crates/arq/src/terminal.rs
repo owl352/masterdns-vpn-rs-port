@@ -110,7 +110,7 @@ impl Arq {
     pub(crate) fn emit_terminal_packet_with_ttl(&self, packet_type: u8, reason: &str, ttl: Duration) {
         enum Action {
             None,
-            CloseRead { seq: u16 },
+            CloseRead { seq: u16, payload: Vec<u8> },
             CloseWrite { seq: u16 },
             Rst { seq: u16 },
         }
@@ -141,7 +141,13 @@ impl Arq {
                     s.waiting_ack = true;
                     s.waiting_ack_for = packet_type;
                     s.ack_wait_deadline = Some(Instant::now() + self.terminal_ack_wait);
-                    Action::CloseRead { seq }
+                    let payload = if self.stream_id != 0 {
+                        s.transport.as_mut().map(|t| {
+                            let end = *t.local_eof.get_or_insert(t.send_next);
+                            end.to_be_bytes().to_vec()
+                        }).unwrap_or_default()
+                    } else { Vec::new() };
+                    Action::CloseRead { seq, payload }
                 }
                 enums::PACKET_STREAM_CLOSE_WRITE => {
                     if s.rst_received || s.rst_sent || s.close_write_sent {
@@ -169,14 +175,14 @@ impl Arq {
         };
 
         match action {
-            Action::CloseRead { seq } => {
+            Action::CloseRead { seq, payload } => {
                 self.mark_close_read_sent();
                 self.send_control_packet_with_ttl(
                     enums::PACKET_STREAM_CLOSE_READ,
                     seq,
                     0,
                     0,
-                    &[],
+                    &payload,
                     enums::default_packet_priority(enums::PACKET_STREAM_CLOSE_READ),
                     self.enable_control_reliability,
                     Some(enums::PACKET_STREAM_CLOSE_READ_ACK),

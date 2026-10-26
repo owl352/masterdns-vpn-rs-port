@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,74 @@ func TestGapMetricsDoNotCountSetupOrSuccessfulCompletionWait(t *testing.T) {
 	}
 }
 
+func TestResolverLaneParsing(t *testing.T) {
+	lanes, err := parseResolverRTTs("0, 50ms, 200ms")
+	if err != nil || len(lanes) != 3 || lanes[2] != 200*time.Millisecond {
+		t.Fatalf("unexpected resolver lanes: %v, %v", lanes, err)
+	}
+	for _, value := range []string{"-1ms", "1ms,", "bad", strings.Repeat("1ms,", 8) + "1ms"} {
+		if _, err := parseResolverRTTs(value); err == nil {
+			t.Fatalf("accepted invalid lane setting %q", value)
+		}
+	}
+}
+
+func TestTransportEvidenceRequiresActualEnvelopeAndEveryPeer(t *testing.T) {
+	active := "Transport extension v1 activated"
+	envelope := "Transport extension v1 envelope received"
+	if _, _, err := transportEvidence([]string{active, active}, "extended"); err == nil {
+		t.Fatal("activation without data cannot prove extended transport")
+	}
+	if _, _, err := transportEvidence([]string{active + envelope, ""}, "extended"); err == nil {
+		t.Fatal("missing peer activation cannot prove extended transport")
+	}
+	if activated, peers, err := transportEvidence([]string{active + envelope, active}, "extended"); err != nil || activated != 2 || peers != 1 {
+		t.Fatalf("valid extended evidence rejected: %d %d %v", activated, peers, err)
+	}
+	if _, _, err := transportEvidence([]string{"legacy", envelope}, "legacy"); err == nil {
+		t.Fatal("legacy gate ignored extended data")
+	}
+	if _, _, err := transportEvidence([]string{"legacy", "legacy"}, "legacy"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirectionalLossAndLaneDelta(t *testing.T) {
+	proxy := &udpProxy{impair: Impair{QueryDrop: 1}, rng: rand.New(rand.NewSource(1))}
+	before := proxy.snapshot()
+	sent := 0
+	proxy.deliver(func([]byte) { sent++ }, []byte("query"))
+	proxy.deliverDirection(func([]byte) { sent++ }, []byte("reply"), true)
+	delta := laneDelta(before, proxy.snapshot())
+	if sent != 1 || delta.Queries != 1 || delta.Replies != 1 || delta.QueryDrops != 1 || delta.ReplyDrops != 0 || delta.QueryBytes != 5 || delta.ReplyBytes != 5 {
+		t.Fatalf("directional loss mixed query/reply statistics: %+v, sent=%d", delta, sent)
+	}
+}
+
+func TestHeldRepliesDelayOnlySelectedOrdinal(t *testing.T) {
+	proxy := &udpProxy{impair: Impair{HoldReplyEvery: 2, HoldReplyFor: 20 * time.Millisecond}, rng: rand.New(rand.NewSource(1))}
+	immediate := 0
+	proxy.deliverDirection(func([]byte) { immediate++ }, []byte("first"), true)
+	if immediate != 1 {
+		t.Fatal("first reply should not be held")
+	}
+	start := time.Now()
+	delivered := make(chan time.Duration, 1)
+	proxy.deliverDirection(func([]byte) { delivered <- time.Since(start) }, []byte("held"), true)
+	select {
+	case elapsed := <-delivered:
+		if elapsed < proxy.impair.HoldReplyFor {
+			t.Fatalf("held reply arrived too early: %s", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("held reply never arrived")
+	}
+	proxy.deliverDirection(func([]byte) { immediate++ }, []byte("third"), true)
+	if immediate != 2 {
+		t.Fatal("third reply should not be held")
+	}
+}
+
 func TestInjectedQueryAndReplyCopiesAreCountedSeparately(t *testing.T) {
 	proxy := &udpProxy{impair: Impair{Dup: 1}, rng: rand.New(rand.NewSource(1))}
 	sent := 0
@@ -119,5 +188,43 @@ func TestInjectedQueryAndReplyCopiesAreCountedSeparately(t *testing.T) {
 	proxy.deliverDirection(func([]byte) { sent++ }, []byte("reply"), true)
 	if sent != 4 || proxy.queryCopies.Load() != 1 || proxy.replyCopies.Load() != 1 {
 		t.Fatal("proxy duplication accounting mixed directions")
+	}
+}
+
+func TestDNSFailureInjectionStartsOnlyAfterHandshakeAndPreservesIDs(t *testing.T) {
+	p := &udpProxy{impair: Impair{RcodeEvery: 2}}
+	packet := []byte{0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 1, 'a', 0}
+	now := time.Unix(100, 0)
+	if got := p.injectDNSFailure(packet, now); !bytes.Equal(got, packet) || p.dnsFailures.Load() != 0 {
+		t.Fatal("handshake was impaired")
+	}
+	p.faultStarted.Store(now.UnixNano())
+	if got := p.injectDNSFailure(packet, now); !bytes.Equal(got, packet) {
+		t.Fatal("first traffic reply unexpectedly failed")
+	}
+	failed := p.injectDNSFailure(packet, now)
+	if len(failed) != 12 || failed[0] != packet[0] || failed[1] != packet[1] || failed[3]&15 != 5 || packet[3]&15 != 0 {
+		t.Fatalf("invalid error reply: %x", failed)
+	}
+	for _, n := range failed[4:] {
+		if n != 0 {
+			t.Fatal("error reply retained record counts")
+		}
+	}
+	if p.snapshot().DNSFailures != 1 {
+		t.Fatal("injection evidence was not counted")
+	}
+}
+
+func TestDNSFailureBurstHasFiniteRecoveryInterval(t *testing.T) {
+	p := &udpProxy{impair: Impair{RcodeBurstEvery: time.Second, RcodeBurstFor: 50 * time.Millisecond}}
+	start := time.Unix(100, 0)
+	p.faultStarted.Store(start.UnixNano())
+	packet := []byte{0, 1, 0x81, 0x80, 0, 0, 0, 0, 0, 0, 0, 0}
+	if p.injectDNSFailure(packet, start.Add(20*time.Millisecond))[3]&15 != 5 {
+		t.Fatal("burst was not injected")
+	}
+	if !bytes.Equal(p.injectDNSFailure(packet, start.Add(100*time.Millisecond)), packet) {
+		t.Fatal("finite burst did not recover")
 	}
 }

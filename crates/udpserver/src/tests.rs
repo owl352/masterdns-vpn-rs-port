@@ -398,3 +398,210 @@ async fn has_queued_download_data_reflects_backlog_without_disturbing_pop_order(
     assert_eq!(second.sequence_num, 0);
     assert!(!stream.has_queued_download_data(), "backlog signal must clear once the data is dequeued");
 }
+
+fn transport_init(server:&Server,up:u16,down:u16)->(vpnproto::SessionAcceptPayload,Option<vpnproto::TransportCaps>) {
+    let query=build_query(server,&vpnproto::Packet{packet_type:enums::PACKET_SESSION_INIT,payload:session_init_payload(0,up,down,0,0),..Default::default()});
+    let reply=extract_response(&server.handle_packet(&query).unwrap());
+    (vpnproto::decode_session_accept_payload(&reply.payload).unwrap(),vpnproto::TransportCaps::decode_offer(&reply.payload).unwrap())
+}
+fn transport_request(server:&Server,accept:&vpnproto::SessionAcceptPayload,kind:u8,stream:u16,seq:u16,payload:Vec<u8>)->Option<vpnproto::Packet> {
+    let query=build_query(server,&vpnproto::Packet{session_id:accept.session_id,session_cookie:accept.session_cookie,packet_type:kind,stream_id:stream,sequence_num:seq,payload,..Default::default()});
+    let (response,ticket)=server.handle_packet_with_ticket(&query,std::time::Instant::now())?;
+    if let Some(ticket)=ticket{ticket.sent();}
+    dnsparser::extract_vpn_response(&response,false).ok()
+}
+fn activate_transport(server:&Server)->(vpnproto::SessionAcceptPayload,vpnproto::TransportCaps) {
+    let(a,c)=transport_init(server,150,1200);let c=c.unwrap();
+    let selected=transport_request(server,&a,enums::PACKET_TRANSPORT_CAPS,0,0,c.encode().unwrap()).unwrap();
+    assert_eq!(selected.packet_type,enums::PACKET_TRANSPORT_CAPS_ACK);
+    assert_eq!(vpnproto::TransportCaps::decode(&selected.payload).unwrap().op,2);
+    let committed=transport_request(server,&a,enums::PACKET_TRANSPORT_CAPS,0,0,vpnproto::TransportCaps{op:3,..c}.encode().unwrap()).unwrap();
+    assert_eq!(vpnproto::TransportCaps::decode(&committed.payload).unwrap().op,4);(a,c)
+}
+
+#[tokio::test]
+async fn extension_wire_integration_strips_metadata_once_and_acks_only_sent_generations() {
+    use tokio::io::{AsyncReadExt,AsyncWriteExt};
+    let server=test_server();let(a,c)=activate_transport(&server);
+    let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let arq=stream.arq().unwrap();assert!(arq.transport_enabled());
+    let(mut app,conn)=tokio::io::duplex(8192);assert!(stream.attach_upstream_conn(conn,"test",1,"CONNECTED"));
+    let original=vec![b'q';130];let(compressed,ctype)=compression::compress_payload(&original,compression::TYPE_ZSTD,1);
+    let envelope=vpnproto::TransportEnvelope{inner_kind:enums::PACKET_STREAM_DATA,inner_compression:ctype,logical_seq:0,feedback:None,data:compressed};
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,0,envelope.encode(c.feedback_budget,c.serial_span).unwrap()).is_some());
+    let mut delivered=vec![0;original.len()];tokio::time::timeout(std::time::Duration::from_secs(1),app.read_exact(&mut delivered)).await.unwrap().unwrap();
+    assert_eq!(delivered,original);
+    transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,0,envelope.encode(c.feedback_budget,c.serial_span).unwrap());
+    let mut extra=[0;1];assert!(tokio::time::timeout(std::time::Duration::from_millis(30),app.read(&mut extra)).await.is_err());
+    app.write_all(b"response bytes").await.unwrap();
+    for _ in 0..50 {if stream.fast_tx_queue_size()>0 && arq.has_pending_sequence(0){break;}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+    assert!(!arq.validate_logical_feedback(1,&[],&[]));
+    let ping=build_query(&server,&vpnproto::Packet{session_id:a.session_id,session_cookie:a.session_cookie,packet_type:enums::PACKET_PING,..Default::default()});
+    let(response,ticket)=server.handle_packet_with_ticket(&ping,std::time::Instant::now()).unwrap();
+    let response=extract_response(&response);assert_eq!(response.packet_type,enums::PACKET_STREAM_ENVELOPE);
+    let decoded=vpnproto::TransportEnvelope::decode(&response.payload,response.sequence_num,c.feedback_budget,c.serial_span).unwrap();
+    assert_eq!(decoded.inflate_data_bounded(1200).unwrap(),b"response bytes");
+    if let Some(feedback)=decoded.feedback { assert_eq!(feedback.records[0].ack_next,1); }
+    assert!(!arq.validate_logical_feedback(1,&[],&[]));
+    // Model a socket write failure: queued original remains recoverable and cannot be ACKed.
+    drop(ticket);assert!(stream.fast_tx_queue_size()>0);assert!(!arq.validate_logical_feedback(1,&[],&[]));
+    let(_,ticket)=server.handle_packet_with_ticket(&ping,std::time::Instant::now()).unwrap();ticket.unwrap().sent();
+    assert!(arq.validate_logical_feedback(1,&[],&[]));
+    // Untagged ACKs cannot retire the activated generation.
+    transport_request(&server,&a,enums::PACKET_STREAM_DATA_ACK,1,0,vec![]);assert!(arq.has_pending_sequence(0));
+    let f=vpnproto::TransportFeedback{records:vec![vpnproto::FeedbackRecord{stream_id:1,ack_next:1,sacks:vec![],repairs:vec![]}]};
+    let mut malformed=vpnproto::TransportEnvelope{inner_kind:15,inner_compression:0,logical_seq:1,feedback:Some(f.clone()),data:b"must not arrive".to_vec()}.encode(c.feedback_budget,c.serial_span).unwrap();
+    malformed.push(0);
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,1,malformed).is_none());assert!(arq.has_pending_sequence(0));
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(30),app.read(&mut extra)).await.is_err());
+    transport_request(&server,&a,enums::PACKET_STREAM_FEEDBACK,0,0,f.encode(c.feedback_budget,c.serial_span).unwrap());assert!(!arq.has_pending_sequence(0));
+    arq.close("test",arq::CloseOptions::default());
+    record.remove_stream(1,std::time::Instant::now(),true);
+    assert!(record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).is_none());
+}
+
+#[tokio::test]
+async fn low_mtu_and_legacy_stream_before_commit_freeze_legacy() {
+    let server=test_server();let(_,offer)=transport_init(&server,25,39);assert!(offer.is_none());
+    let server=test_server();let(a,c)=transport_init(&server,150,1200);let c=c.unwrap();
+    transport_request(&server,&a,enums::PACKET_TRANSPORT_CAPS,0,0,c.encode().unwrap()).unwrap();
+    let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    assert!(!stream.arq().unwrap().transport_enabled());
+    assert!(transport_request(&server,&a,enums::PACKET_TRANSPORT_CAPS,0,0,vpnproto::TransportCaps{op:3,..c}.encode().unwrap()).is_none());
+    assert!(!record.transport_active());stream.arq().unwrap().close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn bounded_inner_inflate_failure_applies_no_feedback_or_data() {
+    let server=test_server();let(a,c)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let(comp,kind)=compression::compress_payload(&vec![b'x';4096],compression::TYPE_LZ4,1);
+    let bad=vpnproto::TransportEnvelope{inner_kind:15,inner_compression:kind,logical_seq:0,feedback:None,data:comp};
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,0,bad.encode(c.feedback_budget,c.serial_span).unwrap()).is_none());
+    assert!(stream.arq().unwrap().claim_feedback(std::time::Instant::now(),64,true).is_none());
+    stream.arq().unwrap().close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn feedback_racing_response_ticket_is_replayed_on_write_success() {
+    use tokio::io::AsyncWriteExt;
+    let server=test_server();let(a,c)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let arq=stream.arq().unwrap();let(mut app,conn)=tokio::io::duplex(8192);assert!(stream.attach_upstream_conn(conn,"test",1,"CONNECTED"));
+    app.write_all(b"reply").await.unwrap();
+    for _ in 0..50 {if arq.has_pending_sequence(0){break;}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+    let query=build_query(&server,&vpnproto::Packet{session_id:a.session_id,session_cookie:a.session_cookie,packet_type:enums::PACKET_PING,..Default::default()});
+    let(reply,ticket)=server.handle_packet_with_ticket(&query,std::time::Instant::now()).unwrap();
+    assert_eq!(extract_response(&reply).packet_type,enums::PACKET_STREAM_ENVELOPE);
+    let feedback=vpnproto::TransportFeedback{records:vec![vpnproto::FeedbackRecord{stream_id:1,ack_next:1,sacks:vec![],repairs:vec![]}]};
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_FEEDBACK,0,0,feedback.encode(c.feedback_budget,c.serial_span).unwrap()).is_some());
+    assert!(arq.has_pending_sequence(0));ticket.unwrap().sent();assert!(!arq.has_pending_sequence(0));
+    arq.close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn negotiated_ready_upstream_serves_full_32_query_burst_and_idle_read_ahead_is_bounded() {
+    use tokio::io::AsyncWriteExt;
+    let server=test_server();let(a,c)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let arq=stream.arq().unwrap();let(mut app,conn)=tokio::io::duplex(256*1024);assert!(stream.attach_upstream_conn(conn,"test",1,"CONNECTED"));
+    // More ready bytes than the negotiated two-batch cushion. No polls means
+    // local reads must stop at the bounded threshold, not fill the ARQ window.
+    app.write_all(&vec![42;128*1175]).await.unwrap();
+    for _ in 0..100 {if stream.fast_tx_queue_size()>=64{break;}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+    assert_eq!(stream.fast_tx_queue_size(),64);
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;assert_eq!(stream.fast_tx_queue_size(),64);
+    for _ in 0..32 {
+        let response=transport_request(&server,&a,enums::PACKET_PING,0,0,vec![]).unwrap();
+        assert_eq!(response.packet_type,enums::PACKET_STREAM_ENVELOPE);
+        let inner=vpnproto::TransportEnvelope::decode(&response.payload,response.sequence_num,c.feedback_budget,c.serial_span).unwrap();
+        assert_eq!(inner.data.len(),1175);
+    }
+    arq.close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn upload_only_uses_current_response_for_ack_instead_of_waiting_for_timer() {
+    let server=test_server();let(a,c)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let envelope=vpnproto::TransportEnvelope{inner_kind:15,inner_compression:0,logical_seq:0,feedback:None,data:b"upload".to_vec()};
+    let response=transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,0,envelope.encode(c.feedback_budget,c.serial_span).unwrap()).unwrap();
+    assert_eq!(response.packet_type,enums::PACKET_STREAM_FEEDBACK);
+    let f=vpnproto::TransportFeedback::decode(&response.payload,c.feedback_budget,c.serial_span).unwrap();
+    assert_eq!(f.records.len(),1);assert_eq!(f.records[0].ack_next,1);assert_eq!(f.records[0].stream_id,1);
+    stream.arq().unwrap().close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn offered_serial_span_preserves_existing_doubled_receive_capacity() {
+    let server=test_server();let(a,c)=activate_transport(&server);
+    let expected=(2*server.cfg.arq_window_size.max(300).min(arq::MAX_WINDOW_SIZE))
+        .min(2*(server.cfg.max_allowed_client_arq_window_size.max(1) as usize).min(arq::MAX_WINDOW_SIZE)).min(16384);
+    assert_eq!(c.serial_span as usize,expected);
+    let record=server.sessions.get(a.session_id).unwrap();let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    assert!(stream.arq().unwrap().receive_logical_data(c.serial_span as u32-1,b"far reorder"));
+    assert!(!stream.arq().unwrap().receive_logical_data(c.serial_span as u32,b"out of window"));
+    stream.arq().unwrap().close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn queued_download_wins_over_immediate_upload_feedback_fallback() {
+    use tokio::io::{AsyncReadExt,AsyncWriteExt};
+    let server=test_server();let(a,c)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let arq=stream.arq().unwrap();let(mut app,conn)=tokio::io::duplex(8192);assert!(stream.attach_upstream_conn(conn,"test",1,"CONNECTED"));
+    app.write_all(b"download").await.unwrap();
+    for _ in 0..50 {if arq.has_pending_sequence(0){break;}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+    let e=vpnproto::TransportEnvelope{inner_kind:15,inner_compression:0,logical_seq:0,feedback:None,data:b"upload".to_vec()};
+    let response=transport_request(&server,&a,enums::PACKET_STREAM_ENVELOPE,1,0,e.encode(c.feedback_budget,c.serial_span).unwrap()).unwrap();
+    assert_eq!(response.packet_type,enums::PACKET_STREAM_ENVELOPE);
+    let decoded=vpnproto::TransportEnvelope::decode(&response.payload,response.sequence_num,c.feedback_budget,c.serial_span).unwrap();
+    assert_eq!(decoded.data,b"download");assert_eq!(decoded.feedback.unwrap().records[0].ack_next,1);
+    let mut received=[0;6];tokio::time::timeout(std::time::Duration::from_secs(1),app.read_exact(&mut received)).await.unwrap().unwrap();assert_eq!(&received,b"upload");
+    arq.close("test",arq::CloseOptions::default());
+}
+
+#[tokio::test]
+async fn negotiated_eof_validates_before_ack_and_replays_after_stream_cleanup() {
+    let server=test_server();let(a,_)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_CLOSE_READ,1,0,vec![]).is_none());
+    assert_eq!(stream.arq().unwrap().state(),arq::StreamState::Open);
+    let mut packed=Vec::new();vpnproto::append_packed_control_block(&mut packed,enums::PACKET_STREAM_CLOSE_READ,1,0,0,0);
+    transport_request(&server,&a,enums::PACKET_PACKED_CONTROL_BLOCKS,0,0,packed);
+    assert_eq!(stream.arq().unwrap().state(),arq::StreamState::Open);
+    let reply=transport_request(&server,&a,enums::PACKET_STREAM_CLOSE_READ,1,0,vpnproto::encode_transport_eof(2).to_vec()).unwrap();
+    if reply.packet_type==enums::PACKET_PACKED_CONTROL_BLOCKS {
+        assert!(reply.payload.chunks_exact(7).any(|p|p[0]==enums::PACKET_STREAM_CLOSE_READ_ACK));
+    }else{assert_eq!(reply.packet_type,enums::PACKET_STREAM_CLOSE_READ_ACK);assert_eq!(reply.sequence_num,0);}
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_CLOSE_READ,1,0,vpnproto::encode_transport_eof(3).to_vec()).is_none());
+    stream.arq().unwrap().close("test",arq::CloseOptions::default());record.remove_stream(1,std::time::Instant::now(),true);
+    let replay=transport_request(&server,&a,enums::PACKET_STREAM_CLOSE_READ,1,0,vpnproto::encode_transport_eof(2).to_vec()).unwrap();
+    assert!(matches!(replay.packet_type,enums::PACKET_STREAM_CLOSE_READ_ACK|enums::PACKET_PACKED_CONTROL_BLOCKS));
+    assert!(transport_request(&server,&a,enums::PACKET_STREAM_CLOSE_READ,1,0,vpnproto::encode_transport_eof(3).to_vec()).is_none());
+}
+
+#[tokio::test]
+async fn captured_enqueue_and_write_callbacks_after_tx_abort_cannot_restore_ownership() {
+    use tokio::io::{AsyncReadExt,AsyncWriteExt};
+    use arq::PacketEnqueuer;
+    let server=test_server();let(a,_)=activate_transport(&server);let record=server.sessions.get(a.session_id).unwrap();
+    let stream=record.get_or_create_stream(1,server.stream_arq_config(0),1200,server.log.clone()).unwrap();
+    let arq=stream.arq().unwrap();let(mut app,conn)=tokio::io::duplex(8192);assert!(stream.attach_upstream_conn(conn,"test",1,"CONNECTED"));
+    assert!(arq.receive_logical_data(1,b"tail"));assert!(arq.receive_logical_eof(2));
+    app.write_all(b"captured outbound").await.unwrap();
+    for _ in 0..50 {if arq.has_pending_sequence(0){break;}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+    let captured=stream.pop_next_tx_packet().unwrap().0;let seq=captured.logical_sequence.unwrap();
+    assert!(arq.note_logical_write_pending(seq));assert!(arq.apply_logical_feedback(seq+1,&[],&[]));
+    arq.mark_close_write_received();
+    assert!(!stream.push_tx_logical_packet(3,captured.packet_type,seq,captured.fragment_id,captured.total_fragments,captured.compression_type,std::time::Duration::ZERO,&captured.payload));
+    arq.note_logical_dispatched(seq,captured.packet_type);arq.note_logical_send_failed(seq);
+    assert!(!arq.has_pending_logical_sequence(seq));assert_eq!(stream.fast_tx_queue_size(),0);
+    // Opposite-direction retained data and the EOF bound survived TX cleanup.
+    assert!(arq.receive_logical_data(0,b"head"));let mut received=[0;8];
+    tokio::time::timeout(std::time::Duration::from_secs(1),app.read_exact(&mut received)).await.unwrap().unwrap();assert_eq!(&received,b"headtail");
+    assert!(arq.receive_logical_eof(2));assert!(!arq.receive_logical_eof(3));
+    arq.close("test",arq::CloseOptions::default());
+}

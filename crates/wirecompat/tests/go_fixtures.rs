@@ -30,7 +30,10 @@ fn frames_build_and_parse_like_go() {
 fn same_packet_types_are_valid_as_in_go() {
     let fx = go_fixtures();
     let rust_invalid: Vec<u8> = (0..=255u8).filter(|&t| vpnproto::build_raw(&vpnproto::BuildOptions { packet_type: t, ..Default::default() }).is_err()).collect();
-    assert_eq!(rust_invalid, fx.invalid_packet_types);
+    // The retained legacy fixture predates the negotiated v1 types.
+    let expected:Vec<u8> = fx.invalid_packet_types.into_iter().filter(|t| !matches!(*t,
+        enums::PACKET_TRANSPORT_CAPS | enums::PACKET_TRANSPORT_CAPS_ACK | enums::PACKET_STREAM_FEEDBACK | enums::PACKET_STREAM_ENVELOPE | enums::PACKET_UDP_DATAGRAM)).collect();
+    assert_eq!(rust_invalid, expected);
 }
 
 #[test]
@@ -104,6 +107,7 @@ fn go_ciphertexts_decrypt_in_rust() {
 fn go_compressed_payloads_decompress_in_rust() {
     for case in &go_fixtures().compression {
         let data = compression::try_decompress_payload(&unhex(&case.compressed), case.comp_type).unwrap_or_else(|| panic!("type {}", case.comp_type));
+        assert_eq!(compression::try_decompress_payload_bounded(&unhex(&case.compressed),case.comp_type,data.len()).unwrap(),data);
         assert_eq!(hex(&data), case.data, "type {}", case.comp_type);
     }
 }
@@ -141,5 +145,49 @@ fn go_server_responses_parse_in_rust() {
         let mut got = Frame::from_packet(&packet);
         got.compression_type = 0;
         assert_eq!(got, case.frame, "response[{i}] base={}", case.base_encode);
+    }
+}
+
+#[test]
+fn negotiated_transport_matches_shared_vectors() {
+    use vpnproto::{FeedbackRange, FeedbackRecord, TransportCaps, TransportEnvelope, TransportFeedback};
+    let fx:serde_json::Value=serde_json::from_str(include_str!("../../../compat/fixtures/transport-v1.json")).unwrap();
+    let number=|v:&serde_json::Value,key:&str|v[key].as_u64().unwrap();
+    let range=|v:&serde_json::Value| FeedbackRange{offset:v[0].as_u64().unwrap() as u16,length:v[1].as_u64().unwrap() as u16};
+    for v in fx["feedback"].as_array().unwrap() {
+        let f=TransportFeedback{records:v["records"].as_array().unwrap().iter().map(|r|FeedbackRecord{
+            stream_id:number(r,"streamId") as u16,ack_next:number(r,"ackNext") as u32,
+            sacks:r["sack"].as_array().unwrap().iter().map(range).collect(),
+            repairs:r["repair"].as_array().unwrap().iter().map(range).collect(),
+        }).collect()};
+        let budget=number(v,"budget") as u16;let span=number(v,"span") as u16;
+        assert_eq!(hex(&f.encode(budget,span).unwrap()),v["hex"].as_str().unwrap(),"{}",v["name"]);
+        assert_eq!(TransportFeedback::decode(&unhex(v["hex"].as_str().unwrap()),budget,span).unwrap(),f);
+    }
+    for v in fx["envelopes"].as_array().unwrap() {
+        let budget=number(v,"budget") as u16;let span=number(v,"span") as u16;
+        let fb=unhex(v["feedbackHex"].as_str().unwrap());
+        let e=TransportEnvelope{inner_kind:number(v,"kind") as u8,inner_compression:number(v,"compression") as u8,
+            logical_seq:number(v,"logicalSeq") as u32,feedback:if fb.is_empty(){None}else{Some(TransportFeedback::decode(&fb,budget,span).unwrap())},
+            data:unhex(v["dataHex"].as_str().unwrap())};
+        assert_eq!(hex(&e.encode(budget,span).unwrap()),v["hex"].as_str().unwrap());
+        assert_eq!(TransportEnvelope::decode(&unhex(v["hex"].as_str().unwrap()),number(v,"outerSeq") as u16,budget,span).unwrap(),e);
+    }
+    for v in fx["selections"].as_array().unwrap() {
+        let c=TransportCaps{op:number(v,"op") as u8,features:number(v,"features") as u8,
+            nonce:u64::from_be_bytes(unhex(v["nonce"].as_str().unwrap()).try_into().unwrap()),feedback_budget:number(v,"budget") as u16,serial_span:number(v,"span") as u16};
+        assert_eq!(hex(&c.encode().unwrap()),v["hex"].as_str().unwrap());
+        assert_eq!(TransportCaps::decode(&unhex(v["hex"].as_str().unwrap())).unwrap(),c);
+    }
+    for v in fx["eof"].as_array().unwrap() {
+        let end=number(v,"end") as u32;
+        assert_eq!(hex(&vpnproto::encode_transport_eof(end)),v["hex"].as_str().unwrap());
+        assert_eq!(vpnproto::decode_transport_eof(&unhex(v["hex"].as_str().unwrap())).unwrap(),end);
+    }
+    for v in fx["invalidEof"].as_array().unwrap() {
+        assert!(vpnproto::decode_transport_eof(&unhex(v.as_str().unwrap())).is_err());
+    }
+    for v in fx["invalidFeedback"].as_array().unwrap() {
+        assert!(TransportFeedback::decode(&unhex(v["hex"].as_str().unwrap()),number(v,"budget") as u16,number(v,"span") as u16).is_err(),"{}",v["name"]);
     }
 }

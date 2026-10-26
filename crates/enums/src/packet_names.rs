@@ -61,6 +61,11 @@ pub fn packet_type_name(packet_type: u8) -> String {
         PACKET_SESSION_BUSY => "PACKET_SESSION_BUSY".to_string(),
         PACKET_STREAM_DATA_NACK => "PACKET_STREAM_DATA_NACK".to_string(),
         PACKET_ERROR_DROP => "PACKET_ERROR_DROP".to_string(),
+        PACKET_TRANSPORT_CAPS => "PACKET_TRANSPORT_CAPS".to_string(),
+        PACKET_TRANSPORT_CAPS_ACK => "PACKET_TRANSPORT_CAPS_ACK".to_string(),
+        PACKET_STREAM_FEEDBACK => "PACKET_STREAM_FEEDBACK".to_string(),
+        PACKET_STREAM_ENVELOPE => "PACKET_STREAM_ENVELOPE".to_string(),
+        PACKET_UDP_DATAGRAM => "PACKET_UDP_DATAGRAM".to_string(),
         other => format!("PACKET_{other}"),
     }
 }

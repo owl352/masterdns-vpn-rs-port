@@ -34,6 +34,16 @@ pub trait PacketEnqueuer: Send + Sync {
         payload: &[u8],
     ) -> bool;
 
+    /// Generation-aware enqueue; legacy implementations keep their original API.
+    #[allow(clippy::too_many_arguments)]
+    fn push_tx_logical_packet(&self, priority: i32, packet_type: u8, logical_seq: u32,
+        fragment_id: u8, total_fragments: u8, compression_type: u8, ttl: Duration, payload: &[u8]) -> bool {
+        self.push_tx_packet(priority, packet_type, logical_seq as u16, fragment_id, total_fragments, compression_type, ttl, payload)
+    }
+    fn remove_queued_logical_data(&self, logical_seq: u32) -> bool {
+        self.remove_queued_data(logical_seq as u16)
+    }
+
     /// Optional: called when the ARQ stream fully closes.
     fn on_arq_closed(&self, _reason: &str) {}
     /// Optional: remove a previously queued DATA packet by sequence number
@@ -73,6 +83,7 @@ impl ArqLogger for DummyLogger {}
 
 #[derive(Debug, Clone)]
 pub(crate) struct DataItem {
+    pub logical_seq: Option<u32>,
     pub data: Vec<u8>,
     pub nack_pending: bool,
     pub retry_cause: Option<RetryCause>,
@@ -164,6 +175,9 @@ pub(crate) fn setup_control_packet_types() -> &'static HashMap<u8, ()> {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub window_size: usize,
+    /// Zero retains the legacy wire protocol. Set only before stream creation.
+    pub transport_serial_span: u16,
+    pub transport_feedback_budget: u16,
     pub rto: f64,
     pub max_rto: f64,
     pub is_virtual: bool,
@@ -189,6 +203,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             window_size: 300,
+            transport_serial_span: 0,
+            transport_feedback_budget: 0,
             rto: 0.5,
             max_rto: 3.0,
             is_virtual: false,
